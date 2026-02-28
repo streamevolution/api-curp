@@ -41,31 +41,48 @@ app.get('/scrape-curp', async (req, res) => {
         await new Promise(r => setTimeout(r, 5000));
 
         const datosExtraidos = await page.evaluate((curpBuscada) => {
-            const extraerValor = (palabrasClave) => {
+                        const extraerValor = (palabrasClave) => {
                 if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                 const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
                 
-                const etiqueta = elementos.find(el => {
+                // 1. Buscamos TODAS las etiquetas que coincidan, no solo la primera
+                const etiquetas = elementos.filter(el => {
                     const texto = el.innerText.trim().toUpperCase();
+                    // Evitamos que 'ENTIDAD DE NACIMIENTO' se confunda con 'NACIMIENTO' verificando la coincidencia exacta o cercana
                     return el.children.length === 0 && palabrasClave.some(palabra => texto.includes(palabra));
                 });
                 
-                if (etiqueta) {
+                // 2. Revisamos cada etiqueta candidata hasta encontrar la que SÍ tiene el valor
+                for (let etiqueta of etiquetas) {
+                    let valorEncontrado = '';
                     const textoCompleto = etiqueta.innerText.trim();
+                    
+                    // Caso A: El valor está pegado con dos puntos
                     if (textoCompleto.includes(':')) {
                         const partes = textoCompleto.split(':');
                         if (partes.length > 1 && partes[1].trim() !== '') {
-                            return partes[1].trim();
+                            valorEncontrado = partes[1].trim();
                         }
                     }
-                    if (etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
-                        return etiqueta.nextElementSibling.innerText.trim();
-                    } else if (etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
-                        return etiqueta.parentElement.nextElementSibling.innerText.trim();
+                    
+                    // Caso B: El valor está en el siguiente elemento
+                    if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
+                        valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
+                    } 
+                    // Caso C: El valor está en la siguiente celda de la tabla
+                    else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                        valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
+                    }
+
+                    // Si encontramos un valor real (no vacío y mayor a 2 letras/números), lo regresamos y terminamos
+                    if (valorEncontrado && valorEncontrado.length > 2) {
+                        return valorEncontrado;
                     }
                 }
-                return '';
+                
+                return ''; // Si revisó todos y ninguno tenía datos, regresa vacío
             };
+
 
             return {
                 curp: curpBuscada,
