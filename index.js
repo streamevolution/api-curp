@@ -74,6 +74,45 @@ app.get('/scrape-curp', async (req, res) => {
                 municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
             };
         }, curp);
+        
+                // --- INICIO DE INTERCEPCIÓN DEL PDF OFICIAL ---
+        const fs = require('fs');
+        const path = require('path');
+        
+        // Crear una carpeta temporal segura en Render para guardar el PDF
+        const downloadPath = path.resolve('/tmp', 'curp_' + Date.now());
+        fs.mkdirSync(downloadPath, { recursive: true });
+        
+        // Ordenarle al navegador invisible que permita descargas ahí
+        const client = await page.target().createCDPSession();
+        await client.send('Page.setDownloadBehavior', {
+            behavior: 'allow',
+            downloadPath: downloadPath
+        });
+
+        // Simular el clic en el botón de "Descargar PDF" de RENAPO
+        await page.evaluate(() => {
+            const botones = Array.from(document.querySelectorAll('a, button'));
+            const btnDescargar = botones.find(b => b.innerText.toUpperCase().includes('DESCARGAR PDF'));
+            if (btnDescargar) btnDescargar.click();
+        });
+
+        // Esperar a que caiga el archivo (máximo 10 segundos) y convertirlo a formato seguro
+        let pdfBase64 = null;
+        for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 1000)); // Checar cada segundo
+            const archivos = fs.readdirSync(downloadPath);
+            const archivoPdf = archivos.find(f => f.endsWith('.pdf'));
+            if (archivoPdf) {
+                const buffer = fs.readFileSync(path.join(downloadPath, archivoPdf));
+                pdfBase64 = buffer.toString('base64');
+                break; // Archivo capturado con éxito
+            }
+        }
+        
+        // Empaquetar el PDF junto con los demás datos de texto
+        datosExtraidos.pdfOficial = pdfBase64;
+        // --- FIN DE INTERCEPCIÓN ---
 
 
         await browser.close();
