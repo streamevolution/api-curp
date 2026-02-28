@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -30,33 +32,50 @@ app.get('/scrape-curp', async (req, res) => {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
         
+        // --- OPTIMIZACIÓN 1: BLOQUEAR RECURSOS INNECESARIOS ---
+        await page.setRequestInterception(true);
+        page.on('request', (req) => {
+            const tipo = req.resourceType();
+            // Bloqueamos imágenes, CSS, fuentes y multimedia para que cargue rapidísimo
+            if (['image', 'stylesheet', 'font', 'media'].includes(tipo)) {
+                req.abort();
+            } else {
+                req.continue();
+            }
+        });
+        
         const urlObjetivo = 'https://www.gob.mx/curp/'; 
-        await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 30000 });
+        
+        // --- OPTIMIZACIÓN 2: ESPERAR SOLO AL HTML BASE ---
+        await page.goto(urlObjetivo, { waitUntil: 'domcontentloaded', timeout: 30000 });
         
         await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 10000 });
         await page.type('input[name*="curp" i], input[id*="curp" i]', curp); 
         
         await page.click('button[type="submit"], #searchButton'); 
         
-        await new Promise(r => setTimeout(r, 5000));
+        // --- OPTIMIZACIÓN 3: ESPERA INTELIGENTE (SIN SETTIMEOUT) ---
+        await page.waitForFunction(() => {
+            const textoPagina = document.body.innerText.toUpperCase();
+            return textoPagina.includes('NACIONALIDAD') || textoPagina.includes('DESCARGAR PDF');
+        }, { timeout: 15000 });
 
-                const datosExtraidos = await page.evaluate((curpBuscada) => {
+        // --- CORRECCIÓN: BÚSQUEDA INTELIGENTE DE TEXTOS ---
+        const datosExtraidos = await page.evaluate((curpBuscada) => {
             const extraerValor = (palabrasClave) => {
-                // Permitimos buscar varias opciones de texto a la vez
                 if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                 
                 const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
                 
                 const etiqueta = elementos.find(el => {
                     const texto = el.innerText.trim().toUpperCase();
-                    // Si el elemento no tiene hijos extraños y contiene alguna de nuestras palabras clave
-                    return palabrasClave.some(palabra => texto.includes(palabra));
+                    return el.children.length === 0 && palabrasClave.some(palabra => texto.includes(palabra));
                 });
                 
                 if (etiqueta) {
                     const textoCompleto = etiqueta.innerText.trim();
                     
-                    // Caso 1: El valor está pegado en el mismo texto con dos puntos (Ej: "Fecha de Nacimiento: 12/05/1990")
+                    // Caso 1: El valor está pegado con dos puntos (Ej: "Fecha de Nacimiento: 12/05/1990")
                     if (textoCompleto.includes(':')) {
                         const partes = textoCompleto.split(':');
                         if (partes.length > 1 && partes[1].trim() !== '') {
@@ -82,58 +101,49 @@ app.get('/scrape-curp', async (req, res) => {
                 primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
                 segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
                 sexo: extraerValor('SEXO') || 'No encontrado',
-                // Le pasamos variaciones comunes que usa la página del gobierno
+                // Variaciones comunes para la fecha
                 fechaNacimiento: extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']) || 'No encontrado',
                 nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
                 entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
                 docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
+                // Variaciones comunes para el año
                 anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
                 numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
                 entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
                 municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
             };
         }, curp);
-
         
-                // --- INICIO DE INTERCEPCIÓN DEL PDF OFICIAL ---
-        const fs = require('fs');
-        const path = require('path');
-        
-        // Crear una carpeta temporal segura en Render para guardar el PDF
+        // --- INICIO DE INTERCEPCIÓN DEL PDF OFICIAL ---
         const downloadPath = path.resolve('/tmp', 'curp_' + Date.now());
         fs.mkdirSync(downloadPath, { recursive: true });
         
-        // Ordenarle al navegador invisible que permita descargas ahí
         const client = await page.target().createCDPSession();
         await client.send('Page.setDownloadBehavior', {
             behavior: 'allow',
             downloadPath: downloadPath
         });
 
-        // Simular el clic en el botón de "Descargar PDF" de RENAPO
         await page.evaluate(() => {
             const botones = Array.from(document.querySelectorAll('a, button'));
             const btnDescargar = botones.find(b => b.innerText.toUpperCase().includes('DESCARGAR PDF'));
             if (btnDescargar) btnDescargar.click();
         });
 
-        // Esperar a que caiga el archivo (máximo 10 segundos) y convertirlo a formato seguro
         let pdfBase64 = null;
         for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 1000)); // Checar cada segundo
+            await new Promise(r => setTimeout(r, 1000));
             const archivos = fs.readdirSync(downloadPath);
             const archivoPdf = archivos.find(f => f.endsWith('.pdf'));
             if (archivoPdf) {
                 const buffer = fs.readFileSync(path.join(downloadPath, archivoPdf));
                 pdfBase64 = buffer.toString('base64');
-                break; // Archivo capturado con éxito
+                break; 
             }
         }
         
-        // Empaquetar el PDF junto con los demás datos de texto
         datosExtraidos.pdfOficial = pdfBase64;
         // --- FIN DE INTERCEPCIÓN ---
-
 
         await browser.close();
         res.json(datosExtraidos);
@@ -144,6 +154,7 @@ app.get('/scrape-curp', async (req, res) => {
     }
 });
 
+// Ruta principal para servir la página web de prueba
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="es">
@@ -204,7 +215,6 @@ app.get('/', (req, res) => {
         mensaje.className = 'mensaje cargando';
 
         try {
-            // Como ya viven juntos, usamos ruta relativa para evitar bloqueos
             const url = '/scrape-curp?curp=' + curp;
             const respuesta = await fetch(url);
             const datos = await respuesta.json();
@@ -232,7 +242,6 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
-// AQUÍ ESTÁ EL PUERTO 5330 DIRECTO PARA CAFIREXOS
 app.listen(5330, '0.0.0.0', () => {
     console.log("Servidor de web scraping conectado exitosamente a internet en el puerto 5330");
 });
