@@ -1,8 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
-const fs = require('fs');
-const path = require('path');
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -32,39 +30,19 @@ app.get('/scrape-curp', async (req, res) => {
         const page = await browser.newPage();
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
         
-        // --- OPTIMIZACIÓN 1: BLOQUEAR RECURSOS INNECESARIOS ---
-        await page.setRequestInterception(true);
-        page.on('request', (req) => {
-            const tipo = req.resourceType();
-            // Bloqueamos imágenes, CSS, fuentes y multimedia para que cargue rapidísimo
-            if (['image', 'stylesheet', 'font', 'media'].includes(tipo)) {
-                req.abort();
-            } else {
-                req.continue();
-            }
-        });
-        
         const urlObjetivo = 'https://www.gob.mx/curp/'; 
-        
-        // --- OPTIMIZACIÓN 2: ESPERAR SOLO AL HTML BASE ---
-        await page.goto(urlObjetivo, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 30000 });
         
         await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 10000 });
         await page.type('input[name*="curp" i], input[id*="curp" i]', curp); 
         
         await page.click('button[type="submit"], #searchButton'); 
         
-        // --- OPTIMIZACIÓN 3: ESPERA INTELIGENTE (SIN SETTIMEOUT) ---
-        await page.waitForFunction(() => {
-            const textoPagina = document.body.innerText.toUpperCase();
-            return textoPagina.includes('NACIONALIDAD') || textoPagina.includes('DESCARGAR PDF');
-        }, { timeout: 15000 });
+        await new Promise(r => setTimeout(r, 5000));
 
-        // --- CORRECCIÓN: BÚSQUEDA INTELIGENTE DE TEXTOS ---
         const datosExtraidos = await page.evaluate((curpBuscada) => {
             const extraerValor = (palabrasClave) => {
                 if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
-                
                 const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
                 
                 const etiqueta = elementos.find(el => {
@@ -74,21 +52,15 @@ app.get('/scrape-curp', async (req, res) => {
                 
                 if (etiqueta) {
                     const textoCompleto = etiqueta.innerText.trim();
-                    
-                    // Caso 1: El valor está pegado con dos puntos (Ej: "Fecha de Nacimiento: 12/05/1990")
                     if (textoCompleto.includes(':')) {
                         const partes = textoCompleto.split(':');
                         if (partes.length > 1 && partes[1].trim() !== '') {
                             return partes[1].trim();
                         }
                     }
-
-                    // Caso 2: El valor está en el siguiente cuadrito o celda
                     if (etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
                         return etiqueta.nextElementSibling.innerText.trim();
-                    } 
-                    // Caso 3: Estructura de tablas más compleja
-                    else if (etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                    } else if (etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
                         return etiqueta.parentElement.nextElementSibling.innerText.trim();
                     }
                 }
@@ -101,12 +73,10 @@ app.get('/scrape-curp', async (req, res) => {
                 primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
                 segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
                 sexo: extraerValor('SEXO') || 'No encontrado',
-                // Variaciones comunes para la fecha
                 fechaNacimiento: extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']) || 'No encontrado',
                 nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
                 entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
                 docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
-                // Variaciones comunes para el año
                 anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
                 numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
                 entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
@@ -115,6 +85,9 @@ app.get('/scrape-curp', async (req, res) => {
         }, curp);
         
         // --- INICIO DE INTERCEPCIÓN DEL PDF OFICIAL ---
+        const fs = require('fs');
+        const path = require('path');
+        
         const downloadPath = path.resolve('/tmp', 'curp_' + Date.now());
         fs.mkdirSync(downloadPath, { recursive: true });
         
@@ -132,7 +105,7 @@ app.get('/scrape-curp', async (req, res) => {
 
         let pdfBase64 = null;
         for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 1000));
+            await new Promise(r => setTimeout(r, 1000)); 
             const archivos = fs.readdirSync(downloadPath);
             const archivoPdf = archivos.find(f => f.endsWith('.pdf'));
             if (archivoPdf) {
@@ -154,7 +127,6 @@ app.get('/scrape-curp', async (req, res) => {
     }
 });
 
-// Ruta principal para servir la página web de prueba
 app.get('/', (req, res) => {
     res.send(`<!DOCTYPE html>
 <html lang="es">
@@ -243,5 +215,5 @@ app.get('/', (req, res) => {
 });
 
 app.listen(5330, '0.0.0.0', () => {
-    console.log("Servidor de web scraping conectado exitosamente a internet en el puerto 5330");
+    console.log("Servidor conectado en el puerto 5330");
 });
