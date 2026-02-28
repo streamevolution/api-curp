@@ -41,17 +41,35 @@ app.get('/scrape-curp', async (req, res) => {
         await new Promise(r => setTimeout(r, 5000));
 
                 const datosExtraidos = await page.evaluate((curpBuscada) => {
-            const extraerValor = (palabraClave) => {
+            const extraerValor = (palabrasClave) => {
+                // Permitimos buscar varias opciones de texto a la vez
+                if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
+                
                 const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
-                const etiqueta = elementos.find(el => 
-                    el.children.length === 0 && 
-                    el.innerText.trim().toUpperCase().includes(palabraClave)
-                );
+                
+                const etiqueta = elementos.find(el => {
+                    const texto = el.innerText.trim().toUpperCase();
+                    // Si el elemento no tiene hijos extraños y contiene alguna de nuestras palabras clave
+                    return palabrasClave.some(palabra => texto.includes(palabra));
+                });
                 
                 if (etiqueta) {
-                    if (etiqueta.nextElementSibling) {
+                    const textoCompleto = etiqueta.innerText.trim();
+                    
+                    // Caso 1: El valor está pegado en el mismo texto con dos puntos (Ej: "Fecha de Nacimiento: 12/05/1990")
+                    if (textoCompleto.includes(':')) {
+                        const partes = textoCompleto.split(':');
+                        if (partes.length > 1 && partes[1].trim() !== '') {
+                            return partes[1].trim();
+                        }
+                    }
+
+                    // Caso 2: El valor está en el siguiente cuadrito o celda
+                    if (etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
                         return etiqueta.nextElementSibling.innerText.trim();
-                    } else if (etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                    } 
+                    // Caso 3: Estructura de tablas más compleja
+                    else if (etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
                         return etiqueta.parentElement.nextElementSibling.innerText.trim();
                     }
                 }
@@ -64,16 +82,18 @@ app.get('/scrape-curp', async (req, res) => {
                 primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
                 segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
                 sexo: extraerValor('SEXO') || 'No encontrado',
-                fechaNacimiento: extraerValor('FECHA DE NACIMIENTO') || 'No encontrado',
+                // Le pasamos variaciones comunes que usa la página del gobierno
+                fechaNacimiento: extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']) || 'No encontrado',
                 nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
-                entidadNacimiento: extraerValor('ENTIDAD DE NACIMIENTO') || 'No encontrado',
-                docProbatorio: extraerValor('DOCUMENTO PROBATORIO') || 'No encontrado', 
-                anioRegistro: extraerValor('AÑO DE REGISTRO') || 'No encontrado', 
-                numeroActa: extraerValor('NUMERO DE ACTA') || extraerValor('NÚMERO DE ACTA') || 'No encontrado',
+                entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
+                docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
+                anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
+                numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
                 entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
                 municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
             };
         }, curp);
+
         
                 // --- INICIO DE INTERCEPCIÓN DEL PDF OFICIAL ---
         const fs = require('fs');
