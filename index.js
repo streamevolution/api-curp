@@ -1,6 +1,8 @@
 const express = require('express');
 const cors = require('cors');
 const puppeteer = require('puppeteer');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 app.use(cors({ origin: '*' }));
@@ -41,23 +43,19 @@ app.get('/scrape-curp', async (req, res) => {
         await new Promise(r => setTimeout(r, 5000));
 
         const datosExtraidos = await page.evaluate((curpBuscada) => {
-                        const extraerValor = (palabrasClave) => {
+            const extraerValor = (palabrasClave) => {
                 if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                 const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
                 
-                // 1. Buscamos TODAS las etiquetas que coincidan, no solo la primera
                 const etiquetas = elementos.filter(el => {
                     const texto = el.innerText.trim().toUpperCase();
-                    // Evitamos que 'ENTIDAD DE NACIMIENTO' se confunda con 'NACIMIENTO' verificando la coincidencia exacta o cercana
                     return el.children.length === 0 && palabrasClave.some(palabra => texto.includes(palabra));
                 });
                 
-                // 2. Revisamos cada etiqueta candidata hasta encontrar la que SÍ tiene el valor
                 for (let etiqueta of etiquetas) {
                     let valorEncontrado = '';
                     const textoCompleto = etiqueta.innerText.trim();
                     
-                    // Caso A: El valor está pegado con dos puntos
                     if (textoCompleto.includes(':')) {
                         const partes = textoCompleto.split(':');
                         if (partes.length > 1 && partes[1].trim() !== '') {
@@ -65,24 +63,34 @@ app.get('/scrape-curp', async (req, res) => {
                         }
                     }
                     
-                    // Caso B: El valor está en el siguiente elemento
                     if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
                         valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
-                    } 
-                    // Caso C: El valor está en la siguiente celda de la tabla
-                    else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                    } else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
                         valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
                     }
 
-                    // Si encontramos un valor real (no vacío y mayor a 2 letras/números), lo regresamos y terminamos
                     if (valorEncontrado && valorEncontrado.length > 2) {
                         return valorEncontrado;
                     }
                 }
-                
-                return ''; // Si revisó todos y ninguno tenía datos, regresa vacío
+                return '';
             };
 
+            // Intentamos extraer la fecha de nacimiento normalmente
+            let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
+            
+            // --- TRUCO INFALIBLE: Si la página no lo da, lo calculamos desde la CURP ---
+            if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
+                const anio = curpBuscada.substring(4, 6);
+                const mes = curpBuscada.substring(6, 8);
+                const dia = curpBuscada.substring(8, 10);
+                const homoclave = curpBuscada.charAt(16);
+                
+                // Si la posición 17 de la CURP es un número, nació en los 1900s. Si es letra, nació del 2000 en adelante.
+                const siglo = /[0-9]/.test(homoclave) ? '19' : '20';
+                fechaNac = `${dia}/${mes}/${siglo}${anio}`;
+            }
+            // ---------------------------------------------------------------------------
 
             return {
                 curp: curpBuscada,
@@ -90,7 +98,7 @@ app.get('/scrape-curp', async (req, res) => {
                 primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
                 segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
                 sexo: extraerValor('SEXO') || 'No encontrado',
-                fechaNacimiento: extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']) || 'No encontrado',
+                fechaNacimiento: fechaNac || 'No encontrado',
                 nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
                 entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
                 docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
@@ -102,9 +110,6 @@ app.get('/scrape-curp', async (req, res) => {
         }, curp);
         
         // --- INICIO DE INTERCEPCIÓN DEL PDF OFICIAL ---
-        const fs = require('fs');
-        const path = require('path');
-        
         const downloadPath = path.resolve('/tmp', 'curp_' + Date.now());
         fs.mkdirSync(downloadPath, { recursive: true });
         
