@@ -33,9 +33,11 @@ app.get('/scrape-curp', async (req, res) => {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
         
         const urlObjetivo = 'https://www.gob.mx/curp/'; 
-        await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 30000 });
+        // Aumentamos el tiempo máximo de carga de la página a 60 segundos (60000 ms)
+        await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
         
-        await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 10000 });
+        // También aumentamos el tiempo de espera para encontrar el recuadro de texto a 20 segundos (20000 ms)
+        await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 20000 });
         await page.type('input[name*="curp" i], input[id*="curp" i]', curp); 
         
         await page.click('button[type="submit"], #searchButton'); 
