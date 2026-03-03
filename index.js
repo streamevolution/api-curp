@@ -249,6 +249,80 @@ app.get('/', (req, res) => {
 </html>`);
 });
 
+// --- NUEVO ENDPOINT PARA SCRAPING DE CÓDIGOS POSTALES ---
+app.get('/scrape-cp', async (req, res) => {
+    const cp = req.query.cp;
+    
+    // Validamos que el CP tenga exactamente 5 números
+    if (!cp || cp.length !== 5 || isNaN(cp)) {
+        return res.status(400).json({ error: 'El código postal debe tener 5 números' });
+    }
+
+    let browser;
+    try {
+        browser = await puppeteer.launch({ 
+            headless: "new",
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        const page = await browser.newPage();
+        
+        // Usamos un directorio rápido y estable basado en los datos de SEPOMEX
+        const urlObjetivo = `https://micodigopostal.org/codigo-postal/${cp}/`;
+        
+        await page.goto(urlObjetivo, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        
+        const datosCp = await page.evaluate(() => {
+            // Verificamos si la página arroja un error de que no existe
+            const textoPagina = document.body.innerText;
+            if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) {
+                return { error: 'CP_NO_EXISTENTE' };
+            }
+
+            let estado = '';
+            let municipio = '';
+            let colonias = [];
+
+            // Extraemos los datos leyendo la tabla de resultados de la página
+            const filas = document.querySelectorAll('tbody tr');
+            filas.forEach(fila => {
+                const columnas = fila.querySelectorAll('td');
+                if (columnas.length >= 3) {
+                    // Columna 0: Colonia, Columna 1: Municipio, Columna 2: Estado
+                    colonias.push(columnas[0].innerText.trim()); 
+                    if (!municipio) municipio = columnas[1].innerText.trim(); 
+                    if (!estado) estado = columnas[2].innerText.trim(); 
+                }
+            });
+
+            return {
+                estado: estado,
+                municipio: municipio,
+                colonias: colonias
+            };
+        });
+
+        await browser.close();
+
+        // Si la tabla estaba vacía o marcó error
+        if (datosCp.error === 'CP_NO_EXISTENTE' || datosCp.colonias.length === 0) {
+            return res.status(404).json({ error: 'Código Postal no encontrado' });
+        }
+
+        // Devolvemos el JSON exitoso
+        res.json({
+            cp: cp,
+            estado: datosCp.estado,
+            municipio: datosCp.municipio,
+            colonias: datosCp.colonias // Devolvemos la lista completa de colonias disponibles
+        });
+
+    } catch (error) {
+        if (browser) await browser.close();
+        res.status(500).json({ error: error.message || 'Error al buscar el código postal' });
+    }
+});
+// --------------------------------------------------------
+
 app.listen(5330, '0.0.0.0', () => {
     console.log("Servidor conectado en el puerto 5330");
 });
