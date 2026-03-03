@@ -286,11 +286,11 @@ app.get('/scrape-cp', async (req, res) => {
             const filas = document.querySelectorAll('tbody tr');
             filas.forEach(fila => {
                 const columnas = fila.querySelectorAll('td');
-                if (columnas.length >= 4) {
-                    // Columna 0: Colonia, Columna 2: Municipio, Columna 3: Estado
+                // Columnas reales: [0]Colonia, [1]Tipo, [2]CP, [3]Municipio, [4]Estado
+                if (columnas.length >= 5) {
                     colonias.push(columnas[0].innerText.trim()); 
-                    if (!municipio) municipio = columnas[2].innerText.trim(); 
-                    if (!estado) estado = columnas[3].innerText.trim(); 
+                    if (!municipio) municipio = columnas[3].innerText.trim(); 
+                    if (!estado) estado = columnas[4].innerText.trim(); 
                 }
             });
 
