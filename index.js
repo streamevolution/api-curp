@@ -333,6 +333,69 @@ app.get('/scrape-cp', async (req, res) => {
 });
 // --------------------------------------------------------
 
+// --- NUEVO ENDPOINT PARA BÚSQUEDA POR TEXTO (Colonia, Ciudad, etc.) ---
+app.get('/scrape-buscar', async (req, res) => {
+    const query = req.query.q;
+    
+    if (!query || query.length < 3) {
+        return res.status(400).json({ error: 'La búsqueda debe tener al menos 3 letras o números' });
+    }
+
+    let browser;
+    try {
+        browser = await puppeteer.launch({ 
+            headless: "new",
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage']
+        });
+        const page = await browser.newPage();
+        
+        // Usamos la ruta /buscar/ que acepta tanto texto como números
+        const urlObjetivo = `https://micodigopostal.org/buscar/${encodeURIComponent(query)}/`;
+        
+        await page.goto(urlObjetivo, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        
+        const datosBusqueda = await page.evaluate(() => {
+            const textoPagina = document.body.innerText;
+            if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) {
+                return { error: 'SIN_RESULTADOS' };
+            }
+
+            let resultadosCompletos = [];
+
+            const filas = document.querySelectorAll('tbody tr');
+            filas.forEach(fila => {
+                const columnas = fila.querySelectorAll('td');
+                if (columnas.length >= 7) {
+                    resultadosCompletos.push({
+                        asentamiento: columnas[0].innerText.trim(),
+                        tipo: columnas[1].innerText.trim(),
+                        cp: columnas[2].innerText.trim(),
+                        municipio: columnas[3].innerText.trim(),
+                        estado: columnas[4].innerText.trim(),
+                        ciudad: columnas[5].innerText.trim(),
+                        zona: columnas[6].innerText.trim()
+                    });
+                }
+            });
+
+            return { resultadosCompletos: resultadosCompletos };
+        });
+
+        await browser.close();
+
+        if (datosBusqueda.error === 'SIN_RESULTADOS' || datosBusqueda.resultadosCompletos.length === 0) {
+            return res.status(404).json({ error: 'No se encontraron resultados para esta búsqueda' });
+        }
+
+        res.json({ resultadosCompletos: datosBusqueda.resultadosCompletos });
+
+    } catch (error) {
+        if (browser) await browser.close();
+        res.status(500).json({ error: error.message || 'Error en la búsqueda' });
+    }
+});
+// ----------------------------------------------------------------------
+
 app.listen(5330, '0.0.0.0', () => {
     console.log("Servidor conectado en el puerto 5330");
 });
