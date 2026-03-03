@@ -272,7 +272,6 @@ app.get('/scrape-cp', async (req, res) => {
         await page.goto(urlObjetivo, { waitUntil: 'domcontentloaded', timeout: 30000 });
         
         const datosCp = await page.evaluate(() => {
-            // Verificamos si la página arroja un error de que no existe
             const textoPagina = document.body.innerText;
             if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) {
                 return { error: 'CP_NO_EXISTENTE' };
@@ -281,39 +280,50 @@ app.get('/scrape-cp', async (req, res) => {
             let estado = '';
             let municipio = '';
             let colonias = [];
+            let resultadosCompletos = []; // Aquí guardaremos los 7 campos
 
-            // Extraemos los datos leyendo la tabla de resultados de la página
             const filas = document.querySelectorAll('tbody tr');
             filas.forEach(fila => {
                 const columnas = fila.querySelectorAll('td');
-                // Columnas reales: [0]Colonia, [1]Tipo, [2]CP, [3]Municipio, [4]Estado
-                if (columnas.length >= 5) {
+                // Ahora verificamos que tenga al menos 7 columnas como micodigopostal
+                if (columnas.length >= 7) {
                     colonias.push(columnas[0].innerText.trim()); 
                     if (!municipio) municipio = columnas[3].innerText.trim(); 
                     if (!estado) estado = columnas[4].innerText.trim(); 
+                    
+                    // Extraemos los 7 datos exactos
+                    resultadosCompletos.push({
+                        asentamiento: columnas[0].innerText.trim(),
+                        tipo: columnas[1].innerText.trim(),
+                        cp: columnas[2].innerText.trim(),
+                        municipio: columnas[3].innerText.trim(),
+                        estado: columnas[4].innerText.trim(),
+                        ciudad: columnas[5].innerText.trim(),
+                        zona: columnas[6].innerText.trim()
+                    });
                 }
             });
 
             return {
                 estado: estado,
                 municipio: municipio,
-                colonias: colonias
+                colonias: colonias,
+                resultadosCompletos: resultadosCompletos
             };
         });
 
         await browser.close();
 
-        // Si la tabla estaba vacía o marcó error
         if (datosCp.error === 'CP_NO_EXISTENTE' || datosCp.colonias.length === 0) {
             return res.status(404).json({ error: 'Código Postal no encontrado' });
         }
 
-        // Devolvemos el JSON exitoso
         res.json({
             cp: cp,
             estado: datosCp.estado,
             municipio: datosCp.municipio,
-            colonias: datosCp.colonias // Devolvemos la lista completa de colonias disponibles
+            colonias: datosCp.colonias,
+            resultadosCompletos: datosCp.resultadosCompletos
         });
 
     } catch (error) {
