@@ -43,6 +43,12 @@ app.get('/scrape-curp', async (req, res) => {
         await new Promise(r => setTimeout(r, 5000));
 
         const datosExtraidos = await page.evaluate((curpBuscada) => {
+            const textoPagina = document.body.innerText || "";
+            if (textoPagina.includes('Los datos ingresados no son correctos') || 
+                textoPagina.includes('El formato del CURP es inválido')) {
+                return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
+            }
+
             const extraerValor = (palabrasClave) => {
                 if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                 const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
@@ -109,6 +115,11 @@ app.get('/scrape-curp', async (req, res) => {
             };
         }, curp);
         
+        if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
+            await browser.close();
+            return res.status(404).json({ error: 'CURP_NO_EXISTENTE' });
+        }
+
         // --- INICIO DE INTERCEPCIÓN DEL PDF OFICIAL ---
         const downloadPath = path.resolve('/tmp', 'curp_' + Date.now());
         fs.mkdirSync(downloadPath, { recursive: true });
