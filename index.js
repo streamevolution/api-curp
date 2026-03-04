@@ -170,8 +170,11 @@ app.get('/scrape-buscar', async (req, res) => {
         browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
         const page = await browser.newPage();
         
-        // --- CAMBIO: Usamos la ruta correcta para búsqueda de palabras ---
-        await page.goto(`https://micodigopostal.org/buscarcp.php?buscar=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        // Cambiamos a 'networkidle2' para asegurarnos de que la página cargó completamente
+        await page.goto(`https://micodigopostal.org/buscar/${encodeURIComponent(query.trim())}/`, { waitUntil: 'networkidle2', timeout: 30000 });
+        
+        // OBLIGAMOS a Puppeteer a esperar hasta que la tabla 'tbody tr' exista en la pantalla
+        await page.waitForSelector('tbody tr', { timeout: 6000 }).catch(() => {});
         
         const datosBusqueda = await page.evaluate(() => {
             const textoPagina = document.body.innerText;
@@ -199,6 +202,7 @@ app.get('/scrape-buscar', async (req, res) => {
         res.status(500).json({ error: error.message || 'Error en la búsqueda' });
     }
 });
+
 
 app.get('/', (req, res) => { res.send(`Servidor Activo y Funcionando`); });
 
