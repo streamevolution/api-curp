@@ -7,119 +7,189 @@ const path = require('path');
 const app = express();
 app.use(cors({ origin: '*' }));
 
+class ScrapingQueue {
+    constructor(concurrencyLimit) {
+        this.limit = concurrencyLimit;
+        this.activeCount = 0;
+        this.queue = [];
+    }
+
+    async enqueue(task, req) {
+        let isCancelled = false;
+        
+        // Si el usuario cierra la pestaña o Render corta la conexión, lo marcamos
+        if (req) {
+            req.on('close', () => {
+                isCancelled = true;
+            });
+        }
+
+        if (this.activeCount >= this.limit) {
+            await new Promise(resolve => this.queue.push(resolve));
+        }
+
+        // Cuando llega su turno, verificamos si el usuario ya se fue
+        if (isCancelled) {
+            // Liberamos la fila para el siguiente inmediatamente
+            if (this.queue.length > 0) {
+                const nextResolve = this.queue.shift();
+                nextResolve();
+            }
+            throw new Error('CLIENT_DISCONNECTED'); // Abortamos antes de gastar RAM
+        }
+
+        this.activeCount++;
+        try {
+            return await task();
+        } finally {
+            this.activeCount--;
+            if (this.queue.length > 0) {
+                const nextResolve = this.queue.shift();
+                nextResolve();
+            }
+        }
+    }
+}
+
+// Límite de 1 para evitar que Render se quede sin memoria RAM
+const scrapingQueue = new ScrapingQueue(1);
+
 // --- 1. ENDPOINT CURP ---
 app.get('/scrape-curp', async (req, res) => {
     const curp = req.query.curp;
     if (!curp || curp.length !== 18) return res.status(400).json({ error: 'CURP inválido' });
 
-    let browser;
-    try {
-        browser = await puppeteer.launch({ 
-            headless: "new",
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-first-run', '--no-zygote', '--single-process', '--disable-extensions']
-        });
-        const page = await browser.newPage();
-        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36');
-        
-        const urlObjetivo = 'https://www.gob.mx/curp/'; 
-        await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
-        await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 20000 });
-        await page.type('input[name*="curp" i], input[id*="curp" i]', curp); 
-        await page.click('button[type="submit"], #searchButton'); 
-        
-        await new Promise(r => setTimeout(r, 5000));
+    await scrapingQueue.enqueue(async () => {
+        let browser;
+        try {
+            browser = await puppeteer.launch({ 
+                headless: "new",
+                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-first-run', '--no-zygote', '--single-process', '--disable-extensions']
+            });
+            const page = await browser.newPage();
 
-        const datosExtraidos = await page.evaluate((curpBuscada) => {
-            const textoPagina = document.body.innerText || "";
-            if (textoPagina.includes('Los datos ingresados no son correctos') || textoPagina.includes('El formato del CURP es inválido')) {
-                return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
-            }
+            // OPTIMIZACIÓN 1: Rotar User-Agent aleatoriamente
+            const userAgents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/113.0',
+                'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36'
+            ];
+            const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+            await page.setUserAgent(randomUA);
 
-            const extraerValor = (palabrasClave) => {
-                if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
-                const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
-                const etiquetas = elementos.filter(el => el.children.length === 0 && palabrasClave.some(palabra => el.innerText.trim().toUpperCase().includes(palabra)));
-                
-                for (let etiqueta of etiquetas) {
-                    let valorEncontrado = '';
-                    const textoCompleto = etiqueta.innerText.trim();
-                    if (textoCompleto.includes(':')) {
-                        const partes = textoCompleto.split(':');
-                        if (partes.length > 1 && partes[1].trim() !== '') valorEncontrado = partes[1].trim();
-                    }
-                    if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
-                        valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
-                    } else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
-                        valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
-                    }
-                    if (valorEncontrado && valorEncontrado.length > 2) return valorEncontrado;
+            // OPTIMIZACIÓN 2: Bloquear imágenes, CSS y fuentes para ahorrar memoria y tiempo
+            await page.setRequestInterception(true);
+            page.on('request', (request) => {
+                const resourceType = request.resourceType();
+                if (['image', 'stylesheet', 'font', 'media'].includes(resourceType)) {
+                    request.abort();
+                } else {
+                    request.continue();
                 }
-                return '';
-            };
+            });
+            
+            const urlObjetivo = 'https://www.gob.mx/curp/'; 
+            await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
+            await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 20000 });
+            await page.type('input[name*="curp" i], input[id*="curp" i]', curp); 
+            await page.click('button[type="submit"], #searchButton'); 
+            
+            await new Promise(r => setTimeout(r, 5000));
 
-            let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
-            if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
-                const anio = curpBuscada.substring(4, 6);
-                const mes = curpBuscada.substring(6, 8);
-                const dia = curpBuscada.substring(8, 10);
-                const homoclave = curpBuscada.charAt(16);
-                const siglo = /[0-9]/.test(homoclave) ? '19' : '20';
-                fechaNac = `${dia}/${mes}/${siglo}${anio}`;
+            const datosExtraidos = await page.evaluate((curpBuscada) => {
+                const textoPagina = document.body.innerText || "";
+                if (textoPagina.includes('Los datos ingresados no son correctos') || textoPagina.includes('El formato del CURP es inválido')) {
+                    return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
+                }
+
+                const extraerValor = (palabrasClave) => {
+                    if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
+                    const etiquetas = elementos.filter(el => el.children.length === 0 && palabrasClave.some(palabra => el.innerText.trim().toUpperCase().includes(palabra)));
+                    
+                    for (let etiqueta of etiquetas) {
+                        let valorEncontrado = '';
+                        const textoCompleto = etiqueta.innerText.trim();
+                        if (textoCompleto.includes(':')) {
+                            const partes = textoCompleto.split(':');
+                            if (partes.length > 1 && partes[1].trim() !== '') valorEncontrado = partes[1].trim();
+                        }
+                        if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
+                            valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
+                        } else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                            valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
+                        }
+                        if (valorEncontrado && valorEncontrado.length > 2) return valorEncontrado;
+                    }
+                    return '';
+                };
+
+                let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
+                if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
+                    const anio = curpBuscada.substring(4, 6);
+                    const mes = curpBuscada.substring(6, 8);
+                    const dia = curpBuscada.substring(8, 10);
+                    const homoclave = curpBuscada.charAt(16);
+                    const siglo = /[0-9]/.test(homoclave) ? '19' : '20';
+                    fechaNac = `${dia}/${mes}/${siglo}${anio}`;
+                }
+
+                return {
+                    curp: curpBuscada,
+                    nombre: extraerValor('NOMBRE') || 'No encontrado',
+                    primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
+                    segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
+                    sexo: extraerValor('SEXO') || 'No encontrado',
+                    fechaNacimiento: fechaNac || 'No encontrado',
+                    nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
+                    entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
+                    docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
+                    anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
+                    numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
+                    entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
+                    municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
+                };
+            }, curp);
+            
+            if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
+                await browser.close();
+                return res.status(404).json({ error: 'CURP_NO_EXISTENTE' });
             }
 
-            return {
-                curp: curpBuscada,
-                nombre: extraerValor('NOMBRE') || 'No encontrado',
-                primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
-                segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
-                sexo: extraerValor('SEXO') || 'No encontrado',
-                fechaNacimiento: fechaNac || 'No encontrado',
-                nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
-                entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
-                docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
-                anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
-                numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
-                entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
-                municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
-            };
-        }, curp);
-        
-        if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
+            const downloadPath = path.resolve('/tmp', 'curp_' + Date.now());
+            fs.mkdirSync(downloadPath, { recursive: true });
+            
+            const client = await page.target().createCDPSession();
+            await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
+
+            await page.evaluate(() => {
+                const botones = Array.from(document.querySelectorAll('a, button'));
+                const btnDescargar = botones.find(b => b.innerText.toUpperCase().includes('DESCARGAR PDF'));
+                if (btnDescargar) btnDescargar.click();
+            });
+
+            let pdfBase64 = null;
+            for (let i = 0; i < 10; i++) {
+                await new Promise(r => setTimeout(r, 1000)); 
+                const archivos = fs.readdirSync(downloadPath);
+                const archivoPdf = archivos.find(f => f.endsWith('.pdf'));
+                if (archivoPdf) {
+                    pdfBase64 = fs.readFileSync(path.join(downloadPath, archivoPdf)).toString('base64');
+                    break; 
+                }
+            }
+            
+            datosExtraidos.pdfOficial = pdfBase64;
             await browser.close();
-            return res.status(404).json({ error: 'CURP_NO_EXISTENTE' });
+            res.json(datosExtraidos);
+
+        } catch (error) {
+            if (browser) await browser.close();
+            if (error.message === 'CLIENT_DISCONNECTED') return;
+            res.status(500).json({ error: error.message || 'Error al ejecutar el scraping en el servidor' });
         }
-
-        const downloadPath = path.resolve('/tmp', 'curp_' + Date.now());
-        fs.mkdirSync(downloadPath, { recursive: true });
-        
-        const client = await page.target().createCDPSession();
-        await client.send('Page.setDownloadBehavior', { behavior: 'allow', downloadPath: downloadPath });
-
-        await page.evaluate(() => {
-            const botones = Array.from(document.querySelectorAll('a, button'));
-            const btnDescargar = botones.find(b => b.innerText.toUpperCase().includes('DESCARGAR PDF'));
-            if (btnDescargar) btnDescargar.click();
-        });
-
-        let pdfBase64 = null;
-        for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 1000)); 
-            const archivos = fs.readdirSync(downloadPath);
-            const archivoPdf = archivos.find(f => f.endsWith('.pdf'));
-            if (archivoPdf) {
-                pdfBase64 = fs.readFileSync(path.join(downloadPath, archivoPdf)).toString('base64');
-                break; 
-            }
-        }
-        
-        datosExtraidos.pdfOficial = pdfBase64;
-        await browser.close();
-        res.json(datosExtraidos);
-
-    } catch (error) {
-        if (browser) await browser.close();
-        res.status(500).json({ error: error.message || 'Error al ejecutar el scraping en el servidor' });
-    }
+    }, req);
 });
 
 // --- 2. ENDPOINT CÓDIGOS POSTALES (SOLO NÚMEROS) ---
@@ -127,37 +197,40 @@ app.get('/scrape-cp', async (req, res) => {
     const cp = req.query.cp;
     if (!cp || cp.length !== 5 || isNaN(cp)) return res.status(400).json({ error: 'El código postal debe tener 5 números' });
 
-    let browser;
-    try {
-        browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-        const page = await browser.newPage();
-        await page.goto(`https://micodigopostal.org/codigo-postal/${cp}/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        
-        const datosCp = await page.evaluate(() => {
-            const textoPagina = document.body.innerText;
-            if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) return { error: 'CP_NO_EXISTENTE' };
+    await scrapingQueue.enqueue(async () => {
+        let browser;
+        try {
+            browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+            const page = await browser.newPage();
+            await page.goto(`https://micodigopostal.org/codigo-postal/${cp}/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+            
+            const datosCp = await page.evaluate(() => {
+                const textoPagina = document.body.innerText;
+                if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) return { error: 'CP_NO_EXISTENTE' };
 
-            let resultadosCompletos = [];
-            document.querySelectorAll('tbody tr').forEach(fila => {
-                const columnas = fila.querySelectorAll('td');
-                if (columnas.length >= 7) {
-                    resultadosCompletos.push({
-                        asentamiento: columnas[0].innerText.trim(), tipo: columnas[1].innerText.trim(), cp: columnas[2].innerText.trim(),
-                        municipio: columnas[3].innerText.trim(), estado: columnas[4].innerText.trim(), ciudad: columnas[5].innerText.trim(), zona: columnas[6].innerText.trim()
-                    });
-                }
+                let resultadosCompletos = [];
+                document.querySelectorAll('tbody tr').forEach(fila => {
+                    const columnas = fila.querySelectorAll('td');
+                    if (columnas.length >= 7) {
+                        resultadosCompletos.push({
+                            asentamiento: columnas[0].innerText.trim(), tipo: columnas[1].innerText.trim(), cp: columnas[2].innerText.trim(),
+                            municipio: columnas[3].innerText.trim(), estado: columnas[4].innerText.trim(), ciudad: columnas[5].innerText.trim(), zona: columnas[6].innerText.trim()
+                        });
+                    }
+                });
+                return { resultadosCompletos: resultadosCompletos };
             });
-            return { resultadosCompletos: resultadosCompletos };
-        });
 
-        await browser.close();
-        if (datosCp.error === 'CP_NO_EXISTENTE' || datosCp.resultadosCompletos.length === 0) return res.status(404).json({ error: 'Código Postal no encontrado' });
-        res.json({ resultadosCompletos: datosCp.resultadosCompletos });
+            await browser.close();
+            if (datosCp.error === 'CP_NO_EXISTENTE' || datosCp.resultadosCompletos.length === 0) return res.status(404).json({ error: 'Código Postal no encontrado' });
+            res.json({ resultadosCompletos: datosCp.resultadosCompletos });
 
-    } catch (error) {
-        if (browser) await browser.close();
-        res.status(500).json({ error: error.message || 'Error al buscar el código postal' });
-    }
+        } catch (error) {
+            if (browser) await browser.close();
+            if (error.message === 'CLIENT_DISCONNECTED') return;
+            res.status(500).json({ error: error.message || 'Error al buscar el código postal' });
+        }
+    }, req);
 });
 
 // --- 3. ENDPOINT BÚSQUEDA POR TEXTO (COLONIA/CIUDAD) ---
@@ -165,61 +238,64 @@ app.get('/scrape-buscar', async (req, res) => {
     const query = req.query.q;
     if (!query || query.length < 3) return res.status(400).json({ error: 'La búsqueda debe tener al menos 3 letras o números' });
 
-    let browser;
-    try {
-        browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
-        const page = await browser.newPage();
-        
-        // 1. Entramos a la página principal donde están los 2 buscadores
-        await page.goto('https://micodigopostal.org/', { waitUntil: 'networkidle2', timeout: 30000 });
-        
-        // 2. Esperamos a que los recuadros de búsqueda aparezcan
-        await page.waitForSelector('form input[type="text"]', { timeout: 10000 });
-        
-        // 3. Simulamos ser un humano llenando el recuadro correcto
-        await page.evaluate((q) => {
-            const inputs = document.querySelectorAll('input[type="text"]');
-            // Buscamos el recuadro que NO es para el Código Postal
-            const inputCorrecto = Array.from(inputs).find(i => i.placeholder && !i.placeholder.toLowerCase().includes('código'));
+    await scrapingQueue.enqueue(async () => {
+        let browser;
+        try {
+            browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
+            const page = await browser.newPage();
             
-            if(inputCorrecto) {
-                inputCorrecto.value = q;
-                inputCorrecto.closest('form').submit(); // Presionamos "Enter" / Lupa
-            } else {
-                inputs[0].value = q;
-                inputs[0].closest('form').submit();
-            }
-        }, query);
-
-        // 4. Esperamos a que la página cargue los resultados después del clic
-        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-        await page.waitForSelector('tbody tr', { timeout: 10000 }).catch(() => {});
-        
-        const datosBusqueda = await page.evaluate(() => {
-            const textoPagina = document.body.innerText;
-            if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) return { error: 'SIN_RESULTADOS' };
-
-            let resultadosCompletos = [];
-            document.querySelectorAll('tbody tr').forEach(fila => {
-                const columnas = fila.querySelectorAll('td');
-                if (columnas.length >= 7) {
-                    resultadosCompletos.push({
-                        asentamiento: columnas[0].innerText.trim(), tipo: columnas[1].innerText.trim(), cp: columnas[2].innerText.trim(),
-                        municipio: columnas[3].innerText.trim(), estado: columnas[4].innerText.trim(), ciudad: columnas[5].innerText.trim(), zona: columnas[6].innerText.trim()
-                    });
+            // 1. Entramos a la página principal donde están los 2 buscadores
+            await page.goto('https://micodigopostal.org/', { waitUntil: 'networkidle2', timeout: 30000 });
+            
+            // 2. Esperamos a que los recuadros de búsqueda aparezcan
+            await page.waitForSelector('form input[type="text"]', { timeout: 10000 });
+            
+            // 3. Simulamos ser un humano llenando el recuadro correcto
+            await page.evaluate((q) => {
+                const inputs = document.querySelectorAll('input[type="text"]');
+                // Buscamos el recuadro que NO es para el Código Postal
+                const inputCorrecto = Array.from(inputs).find(i => i.placeholder && !i.placeholder.toLowerCase().includes('código'));
+                
+                if(inputCorrecto) {
+                    inputCorrecto.value = q;
+                    inputCorrecto.closest('form').submit(); // Presionamos "Enter" / Lupa
+                } else {
+                    inputs[0].value = q;
+                    inputs[0].closest('form').submit();
                 }
+            }, query);
+
+            // 4. Esperamos a que la página cargue los resultados después del clic
+            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+            await page.waitForSelector('tbody tr', { timeout: 10000 }).catch(() => {});
+            
+            const datosBusqueda = await page.evaluate(() => {
+                const textoPagina = document.body.innerText;
+                if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) return { error: 'SIN_RESULTADOS' };
+
+                let resultadosCompletos = [];
+                document.querySelectorAll('tbody tr').forEach(fila => {
+                    const columnas = fila.querySelectorAll('td');
+                    if (columnas.length >= 7) {
+                        resultadosCompletos.push({
+                            asentamiento: columnas[0].innerText.trim(), tipo: columnas[1].innerText.trim(), cp: columnas[2].innerText.trim(),
+                            municipio: columnas[3].innerText.trim(), estado: columnas[4].innerText.trim(), ciudad: columnas[5].innerText.trim(), zona: columnas[6].innerText.trim()
+                        });
+                    }
+                });
+                return { resultadosCompletos: resultadosCompletos };
             });
-            return { resultadosCompletos: resultadosCompletos };
-        });
 
-        await browser.close();
-        if (datosBusqueda.error === 'SIN_RESULTADOS' || datosBusqueda.resultadosCompletos.length === 0) return res.status(404).json({ error: 'No se encontraron resultados para esta búsqueda' });
-        res.json({ resultadosCompletos: datosBusqueda.resultadosCompletos });
+            await browser.close();
+            if (datosBusqueda.error === 'SIN_RESULTADOS' || datosBusqueda.resultadosCompletos.length === 0) return res.status(404).json({ error: 'No se encontraron resultados para esta búsqueda' });
+            res.json({ resultadosCompletos: datosBusqueda.resultadosCompletos });
 
-    } catch (error) {
-        if (browser) await browser.close();
-        res.status(500).json({ error: error.message || 'Error en la búsqueda' });
-    }
+        } catch (error) {
+            if (browser) await browser.close();
+            if (error.message === 'CLIENT_DISCONNECTED') return;
+            res.status(500).json({ error: error.message || 'Error en la búsqueda' });
+        }
+    }, req);
 });
 
 
