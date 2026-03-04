@@ -169,7 +169,9 @@ app.get('/scrape-buscar', async (req, res) => {
     try {
         browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
         const page = await browser.newPage();
-        await page.goto(`https://micodigopostal.org/buscar/${encodeURIComponent(query)}/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        
+        // --- CAMBIO: Usamos la ruta correcta para búsqueda de palabras ---
+        await page.goto(`https://micodigopostal.org/buscarcp.php?buscar=${encodeURIComponent(query)}`, { waitUntil: 'domcontentloaded', timeout: 30000 });
         
         const datosBusqueda = await page.evaluate(() => {
             const textoPagina = document.body.innerText;
