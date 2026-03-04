@@ -170,11 +170,30 @@ app.get('/scrape-buscar', async (req, res) => {
         browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
         const page = await browser.newPage();
         
-        // Cambiamos a 'networkidle2' para asegurarnos de que la página cargó completamente
-        await page.goto(`https://micodigopostal.org/buscar/${encodeURIComponent(query.trim())}/`, { waitUntil: 'networkidle2', timeout: 30000 });
+        // 1. Entramos a la página principal donde están los 2 buscadores
+        await page.goto('https://micodigopostal.org/', { waitUntil: 'networkidle2', timeout: 30000 });
         
-        // OBLIGAMOS a Puppeteer a esperar hasta que la tabla 'tbody tr' exista en la pantalla
-        await page.waitForSelector('tbody tr', { timeout: 6000 }).catch(() => {});
+        // 2. Esperamos a que los recuadros de búsqueda aparezcan
+        await page.waitForSelector('form input[type="text"]', { timeout: 10000 });
+        
+        // 3. Simulamos ser un humano llenando el recuadro correcto
+        await page.evaluate((q) => {
+            const inputs = document.querySelectorAll('input[type="text"]');
+            // Buscamos el recuadro que NO es para el Código Postal
+            const inputCorrecto = Array.from(inputs).find(i => i.placeholder && !i.placeholder.toLowerCase().includes('código'));
+            
+            if(inputCorrecto) {
+                inputCorrecto.value = q;
+                inputCorrecto.closest('form').submit(); // Presionamos "Enter" / Lupa
+            } else {
+                inputs[0].value = q;
+                inputs[0].closest('form').submit();
+            }
+        }, query);
+
+        // 4. Esperamos a que la página cargue los resultados después del clic
+        await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
+        await page.waitForSelector('tbody tr', { timeout: 10000 }).catch(() => {});
         
         const datosBusqueda = await page.evaluate(() => {
             const textoPagina = document.body.innerText;
