@@ -64,7 +64,29 @@ app.get('/scrape-curp', async (req, res) => {
         try {
             browser = await puppeteer.launch({ 
                 headless: "new",
-                args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-gpu', '--no-first-run', '--no-zygote', '--single-process', '--disable-extensions']
+                args: [
+                    '--no-sandbox', 
+                    '--disable-setuid-sandbox', 
+                    '--disable-dev-shm-usage', 
+                    '--disable-gpu', 
+                    '--no-first-run', 
+                    '--no-zygote', 
+                    '--single-process', 
+                    '--disable-extensions',
+                    // --- MODO BAJO CONSUMO DE RAM PARA RENDER ---
+                    '--disable-background-networking',
+                    '--disable-background-timer-throttling',
+                    '--disable-client-side-phishing-detection',
+                    '--disable-default-apps',
+                    '--disable-hang-monitor',
+                    '--disable-popup-blocking',
+                    '--disable-prompt-on-repost',
+                    '--disable-sync',
+                    '--metrics-recording-only',
+                    '--no-default-browser-check',
+                    '--mute-audio',
+                    '--disable-software-rasterizer'
+                ]
             });
             const page = await browser.newPage();
 
@@ -192,111 +214,10 @@ app.get('/scrape-curp', async (req, res) => {
     }, req);
 });
 
-// --- 2. ENDPOINT CÓDIGOS POSTALES (SOLO NÚMEROS) ---
-app.get('/scrape-cp', async (req, res) => {
-    const cp = req.query.cp;
-    if (!cp || cp.length !== 5 || isNaN(cp)) return res.status(400).json({ error: 'El código postal debe tener 5 números' });
+// --- 2. ENDPOINT CÓDIGOS POSTALES (ELIMINADO) ---
 
-    await scrapingQueue.enqueue(async () => {
-        let browser;
-        try {
-            browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-            const page = await browser.newPage();
-            await page.goto(`https://micodigopostal.org/codigo-postal/${cp}/`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-            
-            const datosCp = await page.evaluate(() => {
-                const textoPagina = document.body.innerText;
-                if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) return { error: 'CP_NO_EXISTENTE' };
 
-                let resultadosCompletos = [];
-                document.querySelectorAll('tbody tr').forEach(fila => {
-                    const columnas = fila.querySelectorAll('td');
-                    if (columnas.length >= 7) {
-                        resultadosCompletos.push({
-                            asentamiento: columnas[0].innerText.trim(), tipo: columnas[1].innerText.trim(), cp: columnas[2].innerText.trim(),
-                            municipio: columnas[3].innerText.trim(), estado: columnas[4].innerText.trim(), ciudad: columnas[5].innerText.trim(), zona: columnas[6].innerText.trim()
-                        });
-                    }
-                });
-                return { resultadosCompletos: resultadosCompletos };
-            });
-
-            await browser.close();
-            if (datosCp.error === 'CP_NO_EXISTENTE' || datosCp.resultadosCompletos.length === 0) return res.status(404).json({ error: 'Código Postal no encontrado' });
-            res.json({ resultadosCompletos: datosCp.resultadosCompletos });
-
-        } catch (error) {
-            if (browser) await browser.close();
-            if (error.message === 'CLIENT_DISCONNECTED') return;
-            res.status(500).json({ error: error.message || 'Error al buscar el código postal' });
-        }
-    }, req);
-});
-
-// --- 3. ENDPOINT BÚSQUEDA POR TEXTO (COLONIA/CIUDAD) ---
-app.get('/scrape-buscar', async (req, res) => {
-    const query = req.query.q;
-    if (!query || query.length < 3) return res.status(400).json({ error: 'La búsqueda debe tener al menos 3 letras o números' });
-
-    await scrapingQueue.enqueue(async () => {
-        let browser;
-        try {
-            browser = await puppeteer.launch({ headless: "new", args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'] });
-            const page = await browser.newPage();
-            
-            // 1. Entramos a la página principal donde están los 2 buscadores
-            await page.goto('https://micodigopostal.org/', { waitUntil: 'networkidle2', timeout: 30000 });
-            
-            // 2. Esperamos a que los recuadros de búsqueda aparezcan
-            await page.waitForSelector('form input[type="text"]', { timeout: 10000 });
-            
-            // 3. Simulamos ser un humano llenando el recuadro correcto
-            await page.evaluate((q) => {
-                const inputs = document.querySelectorAll('input[type="text"]');
-                // Buscamos el recuadro que NO es para el Código Postal
-                const inputCorrecto = Array.from(inputs).find(i => i.placeholder && !i.placeholder.toLowerCase().includes('código'));
-                
-                if(inputCorrecto) {
-                    inputCorrecto.value = q;
-                    inputCorrecto.closest('form').submit(); // Presionamos "Enter" / Lupa
-                } else {
-                    inputs[0].value = q;
-                    inputs[0].closest('form').submit();
-                }
-            }, query);
-
-            // 4. Esperamos a que la página cargue los resultados después del clic
-            await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => {});
-            await page.waitForSelector('tbody tr', { timeout: 10000 }).catch(() => {});
-            
-            const datosBusqueda = await page.evaluate(() => {
-                const textoPagina = document.body.innerText;
-                if (textoPagina.includes('No encontramos resultados') || textoPagina.includes('no existe')) return { error: 'SIN_RESULTADOS' };
-
-                let resultadosCompletos = [];
-                document.querySelectorAll('tbody tr').forEach(fila => {
-                    const columnas = fila.querySelectorAll('td');
-                    if (columnas.length >= 7) {
-                        resultadosCompletos.push({
-                            asentamiento: columnas[0].innerText.trim(), tipo: columnas[1].innerText.trim(), cp: columnas[2].innerText.trim(),
-                            municipio: columnas[3].innerText.trim(), estado: columnas[4].innerText.trim(), ciudad: columnas[5].innerText.trim(), zona: columnas[6].innerText.trim()
-                        });
-                    }
-                });
-                return { resultadosCompletos: resultadosCompletos };
-            });
-
-            await browser.close();
-            if (datosBusqueda.error === 'SIN_RESULTADOS' || datosBusqueda.resultadosCompletos.length === 0) return res.status(404).json({ error: 'No se encontraron resultados para esta búsqueda' });
-            res.json({ resultadosCompletos: datosBusqueda.resultadosCompletos });
-
-        } catch (error) {
-            if (browser) await browser.close();
-            if (error.message === 'CLIENT_DISCONNECTED') return;
-            res.status(500).json({ error: error.message || 'Error en la búsqueda' });
-        }
-    }, req);
-});
+// --- 3. ENDPOINT BÚSQUEDA POR TEXTO (ELIMINADO) ---
 
 
 app.get('/', (req, res) => { res.send(`Servidor Activo y Funcionando`); });
