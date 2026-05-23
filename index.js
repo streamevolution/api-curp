@@ -222,6 +222,7 @@ app.get('/scrape-curp', async (req, res) => {
 
 app.get('/', (req, res) => { res.send(`Servidor Activo y Funcionando`); });
 
-app.listen(5330, '0.0.0.0', () => {
-    console.log("Servidor conectado en el puerto 5330");
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, '0.0.0.0', () => {
+    console.log(`Servidor conectado en el puerto ${PORT}`);
 });
