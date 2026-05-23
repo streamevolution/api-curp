@@ -17,7 +17,7 @@ class ScrapingQueue {
     async enqueue(task, req) {
         let isCancelled = false;
         
-        // Si el usuario cierra la pestaña o Render corta la conexión, lo marcamos
+        // Si el usuario cierra la pestaña o la plataforma corta la conexión, lo marcamos
         if (req) {
             req.on('close', () => {
                 isCancelled = true;
@@ -51,7 +51,7 @@ class ScrapingQueue {
     }
 }
 
-// Límite de 1 para evitar que Render se quede sin memoria RAM
+// Límite de 1 para evitar que el servidor se quede sin memoria RAM
 const scrapingQueue = new ScrapingQueue(1);
 
 // --- 1. ENDPOINT CURP ---
@@ -73,7 +73,7 @@ app.get('/scrape-curp', async (req, res) => {
                     '--no-zygote', 
                     '--single-process', 
                     '--disable-extensions',
-                    // --- MODO BAJO CONSUMO DE RAM PARA RENDER ---
+                    // --- MODO BAJO CONSUMO DE RAM ---
                     '--disable-background-networking',
                     '--disable-background-timer-throttling',
                     '--disable-client-side-phishing-detection',
@@ -214,15 +214,10 @@ app.get('/scrape-curp', async (req, res) => {
     }, req);
 });
 
-// --- 2. ENDPOINT CÓDIGOS POSTALES (ELIMINADO) ---
-
-
-// --- 3. ENDPOINT BÚSQUEDA POR TEXTO (ELIMINADO) ---
-
-
 app.get('/', (req, res) => { res.send(`Servidor Activo y Funcionando`); });
 
-const PORT = process.env.PORT || 8080;
+// CÓDIGO DEFINITIVO PARA LA RED DE RAILWAY
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Servidor conectado en el puerto ${PORT}`);
+    console.log(`Servidor levantado correctamente en el puerto: ${PORT}`);
 });
