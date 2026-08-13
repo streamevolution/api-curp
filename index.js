@@ -125,37 +125,21 @@ app.get('/scrape-curp', async (req, res) => {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                                                const extraerValor = (palabrasClave) => {
+                                                                const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
+                    // PASO 1: Buscar en Inputs (Para extraer Nombres y Apellidos ocultos)
                     const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
-                    
                     for (let palabra of palabrasClave) {
                         const candidatos = elementos.filter(el => {
                             const texto = (el.innerText || '').toUpperCase();
                             if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) return false;
                             return texto.includes(palabra);
                         });
-
+                        
                         if (candidatos.length > 0) {
                             candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
-                            
                             for (let el of candidatos) {
-                                const limpiarValor = (val) => {
-                                    let v = val.trim().replace(/\n/g, ' ').toUpperCase();
-                                    if (v.includes('?')) v = v.replace(/\?/g, '').trim(); 
-                                    return v;
-                                };
-
-                                // Seguro anti-etiquetas: Evita devolver el nombre de otra etiqueta si el valor estaba vacío
-                                const esEtiqueta = (txt) => {
-                                    const prohibidas = ['APELLIDO', 'NOMBRE', 'SEXO', 'NACIONALIDAD', 'ENTIDAD', 'MUNICIPIO', 'DOCUMENTO'];
-                                    return prohibidas.some(p => txt.includes(p));
-                                };
-
-                                let valorEncontrado = '';
-
-                                // 1. Búsqueda en Inputs (La solución para extraer los nombres)
                                 const inputs = [];
                                 if (el.nextElementSibling && el.nextElementSibling.tagName === 'INPUT') inputs.push(el.nextElementSibling);
                                 if (el.parentElement) {
@@ -165,50 +149,54 @@ app.get('/scrape-curp', async (req, res) => {
                                     }
                                 }
                                 for (let inp of inputs) {
-                                    if (inp.value && inp.value.trim() !== '') {
-                                        return limpiarValor(inp.value);
+                                    const val = inp.value ? inp.value.trim().toUpperCase() : '';
+                                    // CORRECCIÓN CLAVE: Prohibir estrictamente que tome la CURP como resultado
+                                    if (val.length > 1 && val !== curpBuscada.toUpperCase()) {
+                                        return val.replace(/\?/g, '').trim();
                                     }
                                 }
+                            }
+                        }
+                    }
 
-                                // 2. Búsqueda en Tablas Horizontales
-                                if (el.tagName === 'TH' || el.tagName === 'TD') {
-                                    const tr = el.parentElement;
-                                    if (tr && tr.tagName === 'TR' && tr.nextElementSibling) {
-                                        const idx = Array.from(tr.children).indexOf(el);
-                                        const celdaAbajo = tr.nextElementSibling.children[idx];
-                                        if (celdaAbajo) {
-                                            let txt = limpiarValor(celdaAbajo.innerText);
-                                            if (txt && !esEtiqueta(txt)) return txt;
+                    // PASO 2: TreeWalker (El método original que funcionó perfecto para el Sexo)
+                    for (let palabra of palabrasClave) {
+                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                        let node;
+                        let encontrado = false;
+                        
+                        while ((node = walker.nextNode())) {
+                            let texto = node.nodeValue.trim().toUpperCase();
+                            
+                            if (texto.length === 0 || texto === '?') continue;
+                            if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) continue; 
+                            
+                            if (!encontrado) {
+                                if (texto.includes(palabra)) {
+                                    if (texto.includes(':')) {
+                                        let partes = texto.split(':');
+                                        if (partes.length > 1 && partes[1].trim().length > 1) {
+                                            let res = partes.slice(1).join(':').trim();
+                                            if (res !== curpBuscada.toUpperCase()) return res;
                                         }
                                     }
+                                    encontrado = true; 
                                 }
-
-                                // 3. Búsqueda en el mismo contenedor (ej. "Nombre: JUAN")
-                                const texto = el.innerText.trim().toUpperCase();
-                                if (texto.includes(':')) {
-                                    const partes = texto.split(':');
-                                    if (partes.length > 1 && partes[1].trim() !== '') {
-                                        let txt = limpiarValor(partes.slice(1).join(':'));
-                                        if (txt && !esEtiqueta(txt)) return txt;
+                            } else {
+                                if (texto.length > 1 && texto.length < 150 && texto !== curpBuscada.toUpperCase()) {
+                                    // Seguro para evitar saltar a la siguiente etiqueta si el input estaba invisible
+                                    const prohibidas = ['APELLIDO', 'NOMBRE', 'SEXO', 'NACIONALIDAD', 'ENTIDAD', 'MUNICIPIO', 'DOCUMENTO', 'REGISTRO'];
+                                    const esEtiqueta = prohibidas.some(p => texto === p || texto === p + ':');
+                                    if (!esEtiqueta) {
+                                        return texto;
                                     }
-                                }
-
-                                // 4. Hermano directo
-                                if (el.nextElementSibling) {
-                                    let txt = limpiarValor(el.nextElementSibling.innerText);
-                                    if (txt && !esEtiqueta(txt) && !txt.includes(':')) return txt;
-                                }
-
-                                // 5. Hermano del padre (Grid Divs)
-                                if (el.parentElement && el.parentElement.nextElementSibling) {
-                                    let txt = limpiarValor(el.parentElement.nextElementSibling.innerText);
-                                    if (txt && !esEtiqueta(txt) && !txt.includes(':')) return txt;
                                 }
                             }
                         }
                     }
                     return '';
                 };
+
 
                 let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
                 if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
