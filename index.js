@@ -90,7 +90,7 @@ app.get('/scrape-curp', async (req, res) => {
             });
             const page = await browser.newPage();
 
-            // OPTIMIZACIÓN 1:: Rotar User-Agent aleatoriamente
+            // OPTIMIZACIÓN 1: Rotar User-Agent aleatoriamente
             const userAgents = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
@@ -128,10 +128,10 @@ app.get('/scrape-curp', async (req, res) => {
                                                                                                                const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
-                    // PASO 1: Buscar en Inputs (Ocultos o de solo lectura)
-                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
+                    // PASO 1: Buscar primero en inputs (por si el valor está en un campo de texto oculto)
+                    const elementosInput = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
                     for (let palabra of palabrasClave) {
-                        const candidatos = elementos.filter(el => {
+                        const candidatos = elementosInput.filter(el => {
                             const texto = (el.innerText || '').toUpperCase();
                             if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) return false;
                             return texto.includes(palabra);
@@ -158,66 +158,37 @@ app.get('/scrape-curp', async (req, res) => {
                         }
                     }
 
-                    // PASO 2: Escanear los nodos de texto puros de la página en fila india
-                    const walker = document.createTreeWalker(
-                        document.body,
-                        NodeFilter.SHOW_TEXT,
-                        { acceptNode: function(node) {
-                            if (node.nodeValue.trim().length > 0 && node.nodeValue.trim() !== '?') {
-                                return NodeFilter.FILTER_ACCEPT;
-                            }
-                            return NodeFilter.FILTER_REJECT;
-                        }},
-                        false
-                    );
-
-                    let textosEscaneados = [];
-                    let nodoActual;
-                    while((nodoActual = walker.nextNode())) {
-                        textosEscaneados.push(nodoActual.nodeValue.trim().toUpperCase());
-                    }
-
-                    // Etiquetas del sistema que jamás deben tomarse como un Nombre o Apellido real
+                    // PASO 2: Búsqueda aislada por contenedor/fila (Evita que el texto brinque a otras secciones)
+                    const allElements = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
+                    
                     const etiquetasProhibidas = [
-                        'PRIMER APELLIDO', 'PRIMER APELLIDO:', 'SEGUNDO APELLIDO', 'SEGUNDO APELLIDO:', 
-                        'NOMBRE(S)', 'NOMBRE(S):', 'NOMBRE', 'NOMBRE:', 'SEXO', 'SEXO:', 'HOMBRE', 'MUJER',
-                        'NACIONALIDAD', 'NACIONALIDAD:', 'ENTIDAD', 'ENTIDAD:', 'MUNICIPIO', 'MUNICIPIO:',
-                        'FECHA', 'FECHA DE NACIMIENTO', 'FECHA DE NACIMIENTO:', 'DOCUMENTO', 'REGISTRO', 
-                        'DATOS', 'DÍA DE NACIMIENTO', 'DIA DE NACIMIENTO', 'DATOS DEL SOLICITANTE', 
-                        'DATOS DEL DOCUMENTO PROBATORIO'
+                        'PRIMER APELLIDO', 'SEGUNDO APELLIDO', 'NOMBRE(S)', 'NOMBRE', 
+                        'SEXO', 'NACIONALIDAD', 'ENTIDAD', 'MUNICIPIO', 'FECHA', 
+                        'DOCUMENTO', 'REGISTRO', 'DATOS', 'CLAVE ÚNICA DE REGISTRO DE POBLACIÓN', 'CURP'
                     ];
 
                     for (let palabra of palabrasClave) {
-                        for (let i = 0; i < textosEscaneados.length; i++) {
-                            let texto = textosEscaneados[i];
+                        for (let el of allElements) {
+                            let textoEl = (el.innerText || el.textContent || '').trim().toUpperCase();
                             
-                            if (texto.includes(palabra)) {
+                            // Validar si este elemento contiene la etiqueta exacta que buscamos
+                            if (textoEl === palabra || textoEl === palabra + ':' || (textoEl.includes(palabra) && textoEl.length < 35)) {
                                 
-                                // Caso A: El valor está pegado en el mismo texto (Ej. "Nombre: JUAN")
-                                if (texto.includes(':')) {
-                                    let partes = texto.split(':');
-                                    if (partes.length > 1 && partes[1].trim().length > 1) {
-                                        let valor = partes.slice(1).join(':').trim();
-                                        if (valor !== curpBuscada.toUpperCase() && !etiquetasProhibidas.includes(valor)) {
-                                            return valor;
-                                        }
-                                    }
-                                }
+                                // Encontramos el contenedor o fila (<tr> o div principal de esa línea)
+                                let contenedor = el.closest('tr') || el.closest('.row') || el.parentElement || el;
                                 
-                                // Caso B: El valor está en los siguientes fragmentos (busca hacia adelante 4 pasos)
-                                for (let j = 1; j <= 4; j++) {
-                                    if (i + j < textosEscaneados.length) {
-                                        let textoSiguiente = textosEscaneados[i + j];
-                                        
-                                        // Brincamos signos sueltos
-                                        if (textoSiguiente === ':' || textoSiguiente === '*' || textoSiguiente.includes('SELECCIONA')) continue;
-                                        
-                                        // Validamos que el texto que va a atrapar no sea una etiqueta de la página
-                                        let esEtiqueta = etiquetasProhibidas.includes(textoSiguiente);
-                                        
-                                        if (!esEtiqueta && textoSiguiente !== curpBuscada.toUpperCase() && textoSiguiente.length > 1) {
-                                            return textoSiguiente;
-                                        }
+                                // Extraer todos los textos posibles dentro de este mismo contenedor de la fila
+                                let candidatosContenedor = Array.from(contenedor.querySelectorAll('td, span, div, label, p, strong'))
+                                    .map(e => (e.innerText || e.textContent || '').trim().toUpperCase())
+                                    .filter(t => t.length > 1 && t !== '?');
+
+                                // Buscar el valor real que no sea la etiqueta ni la CURP buscada
+                                for (let cand of candidatosContenedor) {
+                                    let esEtiqueta = etiquetasProhibidas.some(ep => cand === ep || cand.includes(ep));
+                                    let esInvalido = cand === palabra || cand === palabra + ':' || cand.includes(curpBuscada.toUpperCase());
+                                    
+                                    if (!esInvalido && !esEtiqueta && cand.length > 1) {
+                                        return cand;
                                     }
                                 }
                             }
@@ -262,7 +233,7 @@ app.get('/scrape-curp', async (req, res) => {
                 // 4. Generar Nacionalidad Híbrida
                 let nacionalidadGenerada = '';
                 if (claveEntidad !== 'NE') {
-                    nacionalidadGenerada = 'MEXICANA'; // Generado automático si nació en un estado
+                    nacionalidadGenerada = 'MEXICO'; // Generado automático si nació en un estado
                 } else {
                     nacionalidadGenerada = extraerValor(['NACIONALIDAD']) || 'No encontrado'; // Scrapea solo si es extranjero
                 }
