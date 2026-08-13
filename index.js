@@ -150,52 +150,54 @@ app.get('/scrape-curp', async (req, res) => {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                                                                                                                               const extraerValor = (palabrasClave) => {
+                                                                                                                                               const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
-                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, b'));
-                    
+                    // 1. PRIORIDAD ALTA: Extraer de la estructura de tabla oficial (Estándar de RENAPO)
+                    const filas = Array.from(document.querySelectorAll('tr'));
+                    for (let fila of filas) {
+                        // Ignorar filas que contengan inputs o selects (Evita leer el formulario de búsqueda)
+                        if (fila.querySelector('select, input, button')) continue;
+                        
+                        const celdas = Array.from(fila.querySelectorAll('th, td'));
+                        if (celdas.length >= 2) {
+                            let etiqueta = (celdas[0].innerText || '').toUpperCase().trim();
+                            etiqueta = etiqueta.replace(/:/g, '').replace(/\*/g, '').trim();
+                            
+                            for (let palabra of palabrasClave) {
+                                if (etiqueta === palabra || etiqueta.includes(palabra)) {
+                                    let valor = (celdas[1].innerText || '').toUpperCase().trim();
+                                    if (valor && !valor.includes('SELECCIONA') && valor !== '?') return valor;
+                                }
+                            }
+                        }
+                    }
+
+                    // 2. RESPALDO: Extraer de divs, spans, labels (Por si el diseño cambia a móvil/grid)
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, b, label, p'));
                     for (let palabra of palabrasClave) {
                         for (let el of elementos) {
-                            // SOLUCIÓN DEFINITIVA: Ignorar cualquier contenedor del formulario de búsqueda, pestañas o listas desplegables
-                            if (el.closest('form') || el.closest('#tab-01') || el.closest('#tab-02') || el.closest('.tab-content') || el.tagName === 'SELECT' || el.tagName === 'OPTION') {
-                                continue;
-                            }
-
-                            const texto = (el.innerText || '').trim().toUpperCase();
-                            const textoLimpio = texto.replace(/:/g, '').trim();
+                            // Filtro Quirúrgico: Ignorar elementos propios de los formularios de búsqueda
+                            if (el.tagName === 'SELECT' || el.tagName === 'OPTION' || el.tagName === 'INPUT' || el.closest('select')) continue;
                             
-                            // Buscar coincidencia exacta con la etiqueta (ej. "PRIMER APELLIDO")
+                            // Si el contenedor padre tiene un input o select, es un campo de búsqueda, no un resultado
+                            if (el.parentElement && el.parentElement.querySelector('select, input')) continue;
+
+                            let texto = (el.innerText || '').toUpperCase().trim();
+                            let textoLimpio = texto.replace(/:/g, '').replace(/\*/g, '').trim();
+
                             if (textoLimpio === palabra) {
+                                let valor = '';
                                 
-                                // Escenario 1: Estructura de tabla (El estándar de los resultados de gobierno)
-                                if (el.tagName === 'TH' || el.tagName === 'TD') {
-                                    const siguienteCelda = el.nextElementSibling;
-                                    if (siguienteCelda && (siguienteCelda.tagName === 'TD' || siguienteCelda.tagName === 'TH')) {
-                                        const valor = siguienteCelda.innerText.trim().toUpperCase();
-                                        if (valor && !valor.includes('SELECCIONA') && valor !== '?') return valor;
-                                    }
-                                    
-                                    // Búsqueda alternativa en tabla: buscar la segunda celda dentro de la misma fila
-                                    const fila = el.closest('tr');
-                                    if (fila) {
-                                        const celdas = fila.querySelectorAll('td');
-                                        if (celdas.length >= 2) {
-                                            const valor = celdas[1].innerText.trim().toUpperCase();
-                                            if (valor && !valor.includes('SELECCIONA') && valor !== '?') return valor;
-                                        }
-                                    }
+                                if (el.nextElementSibling && !el.nextElementSibling.querySelector('select, input')) {
+                                    valor = (el.nextElementSibling.innerText || '').toUpperCase().trim();
+                                } else if (el.parentElement) {
+                                    let textoPadre = (el.parentElement.innerText || '').toUpperCase().trim();
+                                    valor = textoPadre.replace(texto, '').replace(/:/g, '').trim();
                                 }
-                                
-                                // Escenario 2: Estructura de Div/Span (texto contiguo)
-                                const padre = el.parentElement;
-                                if (padre) {
-                                    let textoPadre = (padre.innerText || '').toUpperCase();
-                                    // Remover la etiqueta para dejar solo el valor limpio
-                                    let valor = textoPadre.replace(texto, '').replace(/:/g, '').trim();
-                                    if (valor && !valor.includes('SELECCIONA') && valor.length > 1 && valor !== '?') {
-                                        return valor;
-                                    }
+
+                                if (valor && valor.length > 1 && !valor.includes('SELECCIONA') && valor !== '?') {
+                                    return valor;
                                 }
                             }
                         }
