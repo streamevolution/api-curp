@@ -136,38 +136,47 @@ app.get('/scrape-curp', async (req, res) => {
                         });
 
                         if (candidatos.length > 0) {
-                            // Ordenar por longitud de texto para agarrar el contenedor más específico/profundo
+                            // Ordenar por longitud de texto para priorizar los elementos más precisos
                             candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
-                            const el = candidatos[0];
-                            const texto = el.innerText.trim().toUpperCase();
+                            
+                            // NUEVO: Iterar sobre TODOS los candidatos encontrados
+                            for (let el of candidatos) {
+                                const texto = el.innerText.trim().toUpperCase();
+                                let valorEncontrado = '';
 
-                            const limpiarValor = (val) => {
-                                const v = val.trim().replace(/\n/g, ' ');
-                                // Evitar que retorne solo el ícono '?' de ayuda del Renapo
-                                return (v !== '?' && v.length > 1) ? v : ''; 
-                            };
+                                const limpiarValor = (val) => {
+                                    let v = val.trim().replace(/\n/g, ' ');
+                                    if (v.includes('?')) v = v.replace(/\?/g, '').trim(); 
+                                    return v;
+                                };
 
-                            let valorEncontrado = '';
-
-                            // 1. Si el valor está en la misma etiqueta separado por ':'
-                            if (texto.includes(':')) {
-                                const partes = texto.split(':');
-                                if (partes.length > 1) {
-                                    valorEncontrado = limpiarValor(partes.slice(1).join(':'));
-                                    if (valorEncontrado) return valorEncontrado;
+                                // 1. En la misma etiqueta separado por ':'
+                                if (texto.includes(':')) {
+                                    const partes = texto.split(':');
+                                    if (partes.length > 1 && partes[1].trim() !== '') {
+                                        valorEncontrado = limpiarValor(partes.slice(1).join(':'));
+                                    }
                                 }
-                            }
 
-                            // 2. Si el valor está en el siguiente elemento hermano
-                            if (el.nextElementSibling) {
-                                valorEncontrado = limpiarValor(el.nextElementSibling.innerText);
-                                if (valorEncontrado) return valorEncontrado;
-                            }
+                                // 2. En el siguiente hermano
+                                if (!valorEncontrado && el.nextElementSibling) {
+                                    valorEncontrado = limpiarValor(el.nextElementSibling.innerText);
+                                }
 
-                            // 3. Si el valor está en el hermano del elemento padre (clásico de tablas actualizadas)
-                            if (el.parentElement && el.parentElement.nextElementSibling) {
-                                valorEncontrado = limpiarValor(el.parentElement.nextElementSibling.innerText);
-                                if (valorEncontrado) return valorEncontrado;
+                                // 3. En el hermano del padre
+                                if (!valorEncontrado && el.parentElement && el.parentElement.nextElementSibling) {
+                                    valorEncontrado = limpiarValor(el.parentElement.nextElementSibling.innerText);
+                                }
+
+                                // NUEVO: VALIDACIÓN ESTRICTA
+                                // Si encuentra basura de los menús desplegables del formulario original, lo ignora y pasa al siguiente candidato.
+                                if (valorEncontrado && 
+                                    valorEncontrado.length > 1 && 
+                                    valorEncontrado.length < 150 && 
+                                    !valorEncontrado.toUpperCase().includes('SELECCIONA') &&
+                                    !valorEncontrado.toUpperCase().includes('BINARIO')) {
+                                    return valorEncontrado; 
+                                }
                             }
                         }
                     }
