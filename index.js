@@ -144,74 +144,56 @@ app.get('/scrape-curp', async (req, res) => {
             // --- FIN DE CAMBIO QUIRÚRGICO ---
 
 
-            const datosExtraidos = await page.evaluate((curpBuscada) => {
-                const textoPagina = document.body.innerText || "";
-                if (textoPagina.includes('Los datos ingresados no son correctos') || textoPagina.includes('El formato del CURP es inválido')) {
+                        const datosExtraidos = await page.evaluate((curpBuscada) => {
+                const bodyText = document.body.innerText.toUpperCase();
+                
+                // 1. Detección exacta del error oficial de RENAPO
+                if (bodyText.includes('LOS DATOS INGRESADOS NO SON CORRECTOS') || 
+                    bodyText.includes('EL FORMATO DEL CURP ES INVÁLIDO') ||
+                    bodyText.includes('TRAMITECURP@SEGOB.GOB.MX')) {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                                                                                                                                               const extraerValor = (palabrasClave) => {
+                // 2. Aislar únicamente el texto de los resultados (ignora formularios)
+                const indexInicio = bodyText.indexOf('DATOS DEL SOLICITANTE');
+                let textoResultados = indexInicio !== -1 ? bodyText.substring(indexInicio) : bodyText;
+                
+                const lineas = textoResultados.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+                const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
-                    // 1. PRIORIDAD ALTA: Extraer de la estructura de tabla oficial (Estándar de RENAPO)
-                    const filas = Array.from(document.querySelectorAll('tr'));
-                    for (let fila of filas) {
-                        // Ignorar filas que contengan inputs o selects (Evita leer el formulario de búsqueda)
-                        if (fila.querySelector('select, input, button')) continue;
-                        
-                        const celdas = Array.from(fila.querySelectorAll('th, td'));
-                        if (celdas.length >= 2) {
-                            let etiqueta = (celdas[0].innerText || '').toUpperCase().trim();
-                            etiqueta = etiqueta.replace(/:/g, '').replace(/\*/g, '').trim();
-                            
-                            for (let palabra of palabrasClave) {
-                                if (etiqueta === palabra || etiqueta.includes(palabra)) {
-                                    let valor = (celdas[1].innerText || '').toUpperCase().trim();
-                                    if (valor && !valor.includes('SELECCIONA') && valor !== '?') return valor;
-                                }
-                            }
-                        }
-                    }
-
-                    // 2. RESPALDO: Extraer de divs, spans, labels (Por si el diseño cambia a móvil/grid)
-                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, b, label, p'));
                     for (let palabra of palabrasClave) {
-                        for (let el of elementos) {
-                            // Filtro Quirúrgico: Ignorar elementos propios de los formularios de búsqueda
-                            if (el.tagName === 'SELECT' || el.tagName === 'OPTION' || el.tagName === 'INPUT' || el.closest('select')) continue;
+                        for (let i = 0; i < lineas.length; i++) {
+                            const linea = lineas[i];
+                            const lineaLimpia = linea.replace(/:/g, '').replace(/\*/g, '').trim();
                             
-                            // Si el contenedor padre tiene un input o select, es un campo de búsqueda, no un resultado
-                            if (el.parentElement && el.parentElement.querySelector('select, input')) continue;
-
-                            let texto = (el.innerText || '').toUpperCase().trim();
-                            let textoLimpio = texto.replace(/:/g, '').replace(/\*/g, '').trim();
-
-                            if (textoLimpio === palabra) {
-                                let valor = '';
-                                
-                                if (el.nextElementSibling && !el.nextElementSibling.querySelector('select, input')) {
-                                    valor = (el.nextElementSibling.innerText || '').toUpperCase().trim();
-                                } else if (el.parentElement) {
-                                    let textoPadre = (el.parentElement.innerText || '').toUpperCase().trim();
-                                    valor = textoPadre.replace(texto, '').replace(/:/g, '').trim();
+                            // Si la línea es exactamente la etiqueta, el valor está en la siguiente línea
+                            if (lineaLimpia === palabra) {
+                                if (i + 1 < lineas.length) {
+                                    const valor = lineas[i + 1];
+                                    const etiquetasProhibidas = ['NOMBRE(S)', 'NOMBRE', 'PRIMER APELLIDO', 'SEGUNDO APELLIDO', 'SEXO', 'FECHA DE NACIMIENTO', 'NACIONALIDAD', 'ENTIDAD DE NACIMIENTO', 'DOCUMENTO', 'AÑO', 'NÚMERO', 'NUMERO', 'ENTIDAD DE REGISTRO', 'MUNICIPIO', 'DATOS'];
+                                    
+                                    const esEtiqueta = etiquetasProhibidas.some(e => valor === e || valor.startsWith(e + ':'));
+                                    
+                                    if (!esEtiqueta && valor.length > 1 && !valor.includes('SELECCIONA') && valor !== '?') {
+                                        return valor;
+                                    }
                                 }
-
-                                if (valor && valor.length > 1 && !valor.includes('SELECCIONA') && valor !== '?') {
-                                    return valor;
-                                }
+                            } 
+                            // Si la etiqueta y el valor quedaron en la misma línea (Ej: "NOMBRE(S): FAUSTO")
+                            else if (linea.startsWith(palabra + ':') || linea.startsWith(palabra + ' :')) {
+                                const valor = linea.substring(linea.indexOf(':') + 1).trim();
+                                if (valor.length > 1 && !valor.includes('SELECCIONA')) return valor;
                             }
                         }
                     }
                     return '';
                 };
 
-
-
-
-                                               // --- INICIO DE GENERACIÓN DE DATOS DESDE CURP ---
-                // 1. Generar Fecha de Nacimiento
+                // --- INICIO DE GENERACIÓN DE DATOS DESDE CURP ---
                 let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
-                if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
+                if (!fechaNac || fechaNac === 'NO ENCONTRADO') {
                     const anio = curpBuscada.substring(4, 6);
                     const mes = curpBuscada.substring(6, 8);
                     const dia = curpBuscada.substring(8, 10);
@@ -220,11 +202,9 @@ app.get('/scrape-curp', async (req, res) => {
                     fechaNac = `${dia}/${mes}/${siglo}${anio}`;
                 }
 
-                // 2. Generar Sexo (Posición 11 del CURP, índice 10)
                 const letraSexo = curpBuscada.charAt(10).toUpperCase();
                 const sexoGenerado = letraSexo === 'H' ? 'HOMBRE' : (letraSexo === 'M' ? 'MUJER' : 'No encontrado');
 
-                // 3. Generar Entidad Federativa (Posiciones 12 y 13 del CURP, índices 11 y 12)
                 const mapaEntidades = {
                     'AS': 'AGUASCALIENTES', 'BC': 'BAJA CALIFORNIA', 'BS': 'BAJA CALIFORNIA SUR',
                     'CC': 'CAMPECHE', 'CL': 'COAHUILA DE ZARAGOZA', 'CM': 'COLIMA', 'CS': 'CHIAPAS',
@@ -239,12 +219,11 @@ app.get('/scrape-curp', async (req, res) => {
                 const claveEntidad = curpBuscada.substring(11, 13).toUpperCase();
                 const entidadGenerada = mapaEntidades[claveEntidad] || 'No encontrado';
 
-                // 4. Generar Nacionalidad Híbrida
                 let nacionalidadGenerada = '';
                 if (claveEntidad !== 'NE') {
-                    nacionalidadGenerada = 'MEXICO'; // Generado automático si nació en un estado
+                    nacionalidadGenerada = 'MEXICO'; 
                 } else {
-                    nacionalidadGenerada = extraerValor(['NACIONALIDAD']) || 'No encontrado'; // Scrapea solo si es extranjero
+                    nacionalidadGenerada = extraerValor(['NACIONALIDAD']) || 'No encontrado'; 
                 }
                 // --- FIN DE GENERACIÓN DE DATOS ---
 
@@ -253,21 +232,18 @@ app.get('/scrape-curp', async (req, res) => {
                     nombre: extraerValor(['NOMBRE(S)', 'NOMBRE']) || 'No encontrado',
                     primerApellido: extraerValor(['PRIMER APELLIDO']) || 'No encontrado',
                     segundoApellido: extraerValor(['SEGUNDO APELLIDO']) || 'No encontrado',
-                    sexo: sexoGenerado, // <-- Ahorra RAM
+                    sexo: sexoGenerado, 
                     fechaNacimiento: fechaNac || 'No encontrado',
-                    nacionalidad: nacionalidadGenerada, // <-- Híbrido: Ahorra RAM en el 98% de los casos
-                    entidadNacimiento: entidadGenerada, // <-- Ahorra RAM
+                    nacionalidad: nacionalidadGenerada, 
+                    entidadNacimiento: entidadGenerada, 
                     docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
                     anioRegistro: extraerValor(['AÑO REGISTRO', 'AÑO DE REGISTRO']) || 'No encontrado', 
                     numeroActa: extraerValor(['NÚMERO DE ACTA', 'NUMERO DE ACTA']) || 'No encontrado',
-                    entidadRegistro: extraerValor(['ENTIDAD DE REGISTRO']) || 'No encontrado', 
-                    municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO']) || 'No encontrado'
+                    entidadRegistro: extraerValor(['ENTIDAD DE REGISTRO', 'ENTIDAD REGISTRO']) || 'No encontrado', 
+                    municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO', 'MUNICIPIO REGISTRO']) || 'No encontrado'
                 };
-
-
-
-
             }, curp);
+
             
             if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
                 await browser.close();
