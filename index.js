@@ -125,68 +125,99 @@ app.get('/scrape-curp', async (req, res) => {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                                                                               const extraerValor = (palabrasClave) => {
+                                                                                                               const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
-                    // MÉTODO DEFINITIVO: Análisis del texto visual de la página
-                    // document.body.innerText nos da el texto exactamente como se ve en pantalla,
-                    // convirtiendo tablas y columnas en saltos de línea (\n) o tabulaciones (\t).
-                    let textoVisual = document.body.innerText || '';
-                    
-                    let lineas = textoVisual
-                        .toUpperCase()
-                        .replace(/\t/g, '\n') 
-                        .split('\n')
-                        .map(l => l.trim())
-                        .filter(l => l.length > 0 && l !== '?');
+                    // PASO 1: Buscar en Inputs (Ocultos o de solo lectura)
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
+                    for (let palabra of palabrasClave) {
+                        const candidatos = elementos.filter(el => {
+                            const texto = (el.innerText || '').toUpperCase();
+                            if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) return false;
+                            return texto.includes(palabra);
+                        });
                         
-                    // Unimos etiquetas que la página web haya cortado en dos renglones
-                    let lineasUnidas = [];
-                    for (let i = 0; i < lineas.length; i++) {
-                        if (lineas[i] === 'PRIMER' && lineas[i+1] && lineas[i+1].includes('APELLIDO')) {
-                            lineasUnidas.push('PRIMER APELLIDO:');
-                            i++; // Saltamos la siguiente línea porque ya la unimos
-                        } else if (lineas[i] === 'SEGUNDO' && lineas[i+1] && lineas[i+1].includes('APELLIDO')) {
-                            lineasUnidas.push('SEGUNDO APELLIDO:');
-                            i++;
-                        } else if (lineas[i] === 'NOMBRE(S)' || lineas[i] === 'NOMBRE') {
-                            lineasUnidas.push('NOMBRE(S):');
-                            if (!lineas[i].includes(':') && lineas[i+1] === ':') i++;
-                        } else {
-                            lineasUnidas.push(lineas[i]);
+                        if (candidatos.length > 0) {
+                            candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+                            for (let el of candidatos) {
+                                const inputs = [];
+                                if (el.nextElementSibling && el.nextElementSibling.tagName === 'INPUT') inputs.push(el.nextElementSibling);
+                                if (el.parentElement) {
+                                    inputs.push(...Array.from(el.parentElement.querySelectorAll('input')));
+                                    if (el.parentElement.nextElementSibling) {
+                                        inputs.push(...Array.from(el.parentElement.nextElementSibling.querySelectorAll('input')));
+                                    }
+                                }
+                                for (let inp of inputs) {
+                                    const val = inp.value ? inp.value.trim().toUpperCase() : '';
+                                    if (val.length > 1 && val !== curpBuscada.toUpperCase()) {
+                                        return val.replace(/\?/g, '').trim();
+                                    }
+                                }
+                            }
                         }
                     }
 
+                    // PASO 2: Escanear los nodos de texto puros de la página en fila india
+                    const walker = document.createTreeWalker(
+                        document.body,
+                        NodeFilter.SHOW_TEXT,
+                        { acceptNode: function(node) {
+                            if (node.nodeValue.trim().length > 0 && node.nodeValue.trim() !== '?') {
+                                return NodeFilter.FILTER_ACCEPT;
+                            }
+                            return NodeFilter.FILTER_REJECT;
+                        }},
+                        false
+                    );
+
+                    let textosEscaneados = [];
+                    let nodoActual;
+                    while((nodoActual = walker.nextNode())) {
+                        textosEscaneados.push(nodoActual.nodeValue.trim().toUpperCase());
+                    }
+
+                    // Etiquetas del sistema que jamás deben tomarse como un Nombre o Apellido real
+                    const etiquetasProhibidas = [
+                        'PRIMER APELLIDO', 'PRIMER APELLIDO:', 'SEGUNDO APELLIDO', 'SEGUNDO APELLIDO:', 
+                        'NOMBRE(S)', 'NOMBRE(S):', 'NOMBRE', 'NOMBRE:', 'SEXO', 'SEXO:', 'HOMBRE', 'MUJER',
+                        'NACIONALIDAD', 'NACIONALIDAD:', 'ENTIDAD', 'ENTIDAD:', 'MUNICIPIO', 'MUNICIPIO:',
+                        'FECHA', 'FECHA DE NACIMIENTO', 'FECHA DE NACIMIENTO:', 'DOCUMENTO', 'REGISTRO', 
+                        'DATOS', 'DÍA DE NACIMIENTO', 'DIA DE NACIMIENTO', 'DATOS DEL SOLICITANTE', 
+                        'DATOS DEL DOCUMENTO PROBATORIO'
+                    ];
+
                     for (let palabra of palabrasClave) {
-                        for (let i = 0; i < lineasUnidas.length; i++) {
-                            let linea = lineasUnidas[i];
+                        for (let i = 0; i < textosEscaneados.length; i++) {
+                            let texto = textosEscaneados[i];
                             
-                            // Si encontramos la etiqueta (Ej. "NOMBRE(S):")
-                            if (linea.includes(palabra)) {
-                                // Caso A: El valor está en la misma línea después de los dos puntos
-                                if (linea.includes(':')) {
-                                    let partes = linea.split(':');
-                                    let valor = partes.slice(1).join(':').trim();
-                                    if (valor.length > 1 && valor !== curpBuscada.toUpperCase()) {
-                                        return valor;
+                            if (texto.includes(palabra)) {
+                                
+                                // Caso A: El valor está pegado en el mismo texto (Ej. "Nombre: JUAN")
+                                if (texto.includes(':')) {
+                                    let partes = texto.split(':');
+                                    if (partes.length > 1 && partes[1].trim().length > 1) {
+                                        let valor = partes.slice(1).join(':').trim();
+                                        if (valor !== curpBuscada.toUpperCase() && !etiquetasProhibidas.includes(valor)) {
+                                            return valor;
+                                        }
                                     }
                                 }
                                 
-                                // Caso B: El valor está en la siguiente línea visual
-                                if (i + 1 < lineasUnidas.length) {
-                                    let valorSiguiente = lineasUnidas[i + 1];
-                                    
-                                    // Bloqueamos cualquier texto basura que haya capturado por error
-                                    const basura = [
-                                        'APELLIDO', 'NOMBRE', 'SEXO', 'NACIONALIDAD', 'ENTIDAD', 
-                                        'MUNICIPIO', 'DÍA DE NACIMIENTO', 'DIA DE NACIMIENTO', 
-                                        'DATOS', 'REGISTRO', 'DOCUMENTO', 'ESTADO', 'CLAVE'
-                                    ];
-                                    
-                                    let esBasura = basura.some(b => valorSiguiente.includes(b));
-                                    
-                                    if (!esBasura && valorSiguiente !== curpBuscada.toUpperCase()) {
-                                        return valorSiguiente;
+                                // Caso B: El valor está en los siguientes fragmentos (busca hacia adelante 4 pasos)
+                                for (let j = 1; j <= 4; j++) {
+                                    if (i + j < textosEscaneados.length) {
+                                        let textoSiguiente = textosEscaneados[i + j];
+                                        
+                                        // Brincamos signos sueltos
+                                        if (textoSiguiente === ':' || textoSiguiente === '*' || textoSiguiente.includes('SELECCIONA')) continue;
+                                        
+                                        // Validamos que el texto que va a atrapar no sea una etiqueta de la página
+                                        let esEtiqueta = etiquetasProhibidas.includes(textoSiguiente);
+                                        
+                                        if (!esEtiqueta && textoSiguiente !== curpBuscada.toUpperCase() && textoSiguiente.length > 1) {
+                                            return textoSiguiente;
+                                        }
                                     }
                                 }
                             }
@@ -194,6 +225,7 @@ app.get('/scrape-curp', async (req, res) => {
                     }
                     return '';
                 };
+
 
 
                                                // --- INICIO DE GENERACIÓN DE DATOS DESDE CURP ---
