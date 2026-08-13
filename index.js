@@ -198,6 +198,8 @@ app.get('/scrape-curp', async (req, res) => {
                 };
 
 
+                                // --- INICIO DE GENERACIÓN DE DATOS DESDE CURP ---
+                // 1. Generar Fecha de Nacimiento
                 let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
                 if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
                     const anio = curpBuscada.substring(4, 6);
@@ -208,21 +210,42 @@ app.get('/scrape-curp', async (req, res) => {
                     fechaNac = `${dia}/${mes}/${siglo}${anio}`;
                 }
 
+                // 2. Generar Sexo (Posición 11 del CURP, índice 10)
+                const letraSexo = curpBuscada.charAt(10).toUpperCase();
+                const sexoGenerado = letraSexo === 'H' ? 'HOMBRE' : (letraSexo === 'M' ? 'MUJER' : 'No encontrado');
+
+                // 3. Generar Entidad Federativa (Posiciones 12 y 13 del CURP, índices 11 y 12)
+                const mapaEntidades = {
+                    'AS': 'AGUASCALIENTES', 'BC': 'BAJA CALIFORNIA', 'BS': 'BAJA CALIFORNIA SUR',
+                    'CC': 'CAMPECHE', 'CL': 'COAHUILA DE ZARAGOZA', 'CM': 'COLIMA', 'CS': 'CHIAPAS',
+                    'CH': 'CHIHUAHUA', 'DF': 'CIUDAD DE MEXICO', 'DG': 'DURANGO', 'GT': 'GUANAJUATO',
+                    'GR': 'GUERRERO', 'HG': 'HIDALGO', 'JC': 'JALISCO', 'MC': 'MEXICO',
+                    'MN': 'MICHOACAN DE OCAMPO', 'MS': 'MORELOS', 'NT': 'NAYARIT', 'NL': 'NUEVO LEON',
+                    'OC': 'OAXACA', 'PL': 'PUEBLA', 'QT': 'QUERETARO', 'QR': 'QUINTANA ROO',
+                    'SP': 'SAN LUIS POTOSI', 'SL': 'SINALOA', 'SR': 'SONORA', 'TC': 'TABASCO',
+                    'TS': 'TAMAULIPAS', 'TL': 'TLAXCALA', 'VZ': 'VERACRUZ DE IGNACIO DE LA LLAVE',
+                    'YN': 'YUCATAN', 'ZS': 'ZACATECAS', 'NE': 'NACIDO EN EL EXTRANJERO'
+                };
+                const claveEntidad = curpBuscada.substring(11, 13).toUpperCase();
+                const entidadGenerada = mapaEntidades[claveEntidad] || 'No encontrado';
+                // --- FIN DE GENERACIÓN DE DATOS ---
+
                 return {
                     curp: curpBuscada,
                     nombre: extraerValor(['NOMBRE(S)', 'NOMBRE']) || 'No encontrado',
                     primerApellido: extraerValor(['PRIMER APELLIDO']) || 'No encontrado',
                     segundoApellido: extraerValor(['SEGUNDO APELLIDO']) || 'No encontrado',
-                    sexo: extraerValor(['SEXO']) || 'No encontrado',
+                    sexo: sexoGenerado, // <-- Ahorra RAM, se usa el dato generado
                     fechaNacimiento: fechaNac || 'No encontrado',
                     nacionalidad: extraerValor(['NACIONALIDAD']) || 'No encontrado',
-                    entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
+                    entidadNacimiento: entidadGenerada, // <-- Ahorra RAM, se usa el dato generado
                     docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
                     anioRegistro: extraerValor(['AÑO REGISTRO', 'AÑO DE REGISTRO']) || 'No encontrado', 
                     numeroActa: extraerValor(['NÚMERO DE ACTA', 'NUMERO DE ACTA']) || 'No encontrado',
                     entidadRegistro: extraerValor(['ENTIDAD DE REGISTRO']) || 'No encontrado', 
                     municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO']) || 'No encontrado'
                 };
+
 
 
             }, curp);
