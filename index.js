@@ -17,7 +17,7 @@ class ScrapingQueue {
     async enqueue(task, req) {
         let isCancelled = false;
         
-        // Sii el usuario cierra la pestaña o la plataforma corta la conexión, lo marcamos
+        // Si el usuario cierra la pestaña o la plataforma corta la conexión, lo marcamos
         if (req) {
             req.on('close', () => {
                 isCancelled = true;
@@ -115,32 +115,51 @@ app.get('/scrape-curp', async (req, res) => {
             await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
             
                                 // --- INICIO DE CAMBIO QUIRÚRGICO ---
-            // 1. Forzar el clic en la pestaña correcta
+            // 1. Simular humano: Clic en la pestaña "Clave Única de Registro de Población"
             try {
                 await page.waitForSelector('a[href="#tab-01"]', { visible: true, timeout: 5000 });
                 await page.click('a[href="#tab-01"]');
-                await new Promise(r => setTimeout(r, 1000)); // Transición de pestaña
+                await new Promise(r => setTimeout(r, 1500)); // Pausa para dejar que la pestaña cargue visualmente
             } catch (e) {
-                console.log("Pestaña no encontrada, continuando el flujo...");
+                console.log("Pestaña no encontrada, continuando...");
             }
 
-            // 2. Detectar el input de la CURP de forma universal
-            const selectorInput = 'input[formcontrolname="curp"], input[name="curp" i], #curpinput, #curp';
+            // 2. Simular humano: Buscar el campo específico y teclear la CURP
+            const selectorInput = '#tab-01 input[type="text"], #curpinput';
             await page.waitForSelector(selectorInput, { visible: true, timeout: 15000 });
-
-            // 3. Simular TECLADO HUMANO (Esto arregla el problema de que RENAPO no detecte el texto)
+            
             const campoCurp = await page.$(selectorInput);
-            await campoCurp.click({ clickCount: 3 }); // Seleccionar todo el texto residual
-            await campoCurp.press('Backspace');       // Borrarlo
-            await page.type(selectorInput, curp, { delay: 30 }); // Escribir letra por letra con 30ms de retraso
+            await campoCurp.click({ clickCount: 3 }); 
+            await campoCurp.press('Backspace');       
+            // Tipeo humano lento (100ms) para forzar al framework de RENAPO a registrar la escritura
+            await page.type(selectorInput, curp, { delay: 100 }); 
 
-            // 4. Hacer clic NATIVO en el botón de buscar
-            const selectorBoton = '#tab-01 button[type="submit"], form button[type="submit"], #searchButton';
-            await page.waitForSelector(selectorBoton, { visible: true, timeout: 5000 });
-            await page.click(selectorBoton);
+            // 3. Simular humano: Buscar y dar clic EXACTAMENTE al botón que dice "Buscar" (junto a * Campos obligatorios)
+            await page.evaluate(() => {
+                const tab1 = document.querySelector('#tab-01');
+                if (tab1) {
+                    const botones = Array.from(tab1.querySelectorAll('button'));
+                    const botonBuscar = botones.find(b => (b.innerText || '').toUpperCase().includes('BUSCAR'));
+                    if (botonBuscar) {
+                        botonBuscar.click(); // Clic humano exacto
+                    }
+                }
+            });
 
-            // 5. Esperar 8 segundos para garantizar que el servidor de RENAPO renderice la respuesta o el error
-            await new Promise(r => setTimeout(r, 8000));
+            // 4. Inteligencia visual: Esperar a que el texto "Datos del solicitante" o el error aparezca en pantalla
+            try {
+                await page.waitForFunction(() => {
+                    const texto = document.body.innerText.toUpperCase();
+                    return texto.includes('DATOS DEL SOLICITANTE') || 
+                           texto.includes('LOS DATOS INGRESADOS NO SON CORRECTOS') ||
+                           texto.includes('EL FORMATO DEL CURP ES INVÁLIDO');
+                }, { timeout: 15000 }); // Espera activa hasta 15 segundos
+                
+                await new Promise(r => setTimeout(r, 2000)); // Pausa extra para asegurar que la tabla termine de formarse
+            } catch(e) {
+                // Respaldo por si el servidor de RENAPO está muy lento
+                await new Promise(r => setTimeout(r, 8000)); 
+            }
             // --- FIN DE CAMBIO QUIRÚRGICO ---
 
 
