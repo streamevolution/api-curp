@@ -150,70 +150,51 @@ app.get('/scrape-curp', async (req, res) => {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                                                                                                               const extraerValor = (palabrasClave) => {
+                                                                                                                               const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
-                    // PASO 1: Buscar primero en inputs (por si el valor está en un campo de texto oculto)
-                    const elementosInput = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
-                    for (let palabra of palabrasClave) {
-                        const candidatos = elementosInput.filter(el => {
-                            const texto = (el.innerText || '').toUpperCase();
-                            if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) return false;
-                            return texto.includes(palabra);
-                        });
-                        
-                        if (candidatos.length > 0) {
-                            candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
-                            for (let el of candidatos) {
-                                const inputs = [];
-                                if (el.nextElementSibling && el.nextElementSibling.tagName === 'INPUT') inputs.push(el.nextElementSibling);
-                                if (el.parentElement) {
-                                    inputs.push(...Array.from(el.parentElement.querySelectorAll('input')));
-                                    if (el.parentElement.nextElementSibling) {
-                                        inputs.push(...Array.from(el.parentElement.nextElementSibling.querySelectorAll('input')));
-                                    }
-                                }
-                                for (let inp of inputs) {
-                                    const val = inp.value ? inp.value.trim().toUpperCase() : '';
-                                    if (val.length > 1 && val !== curpBuscada.toUpperCase()) {
-                                        return val.replace(/\?/g, '').trim();
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // PASO 2: Búsqueda aislada por contenedor/fila (Evita que el texto brinque a otras secciones)
-                    const allElements = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, b'));
                     
-                    const etiquetasProhibidas = [
-                        'PRIMER APELLIDO', 'SEGUNDO APELLIDO', 'NOMBRE(S)', 'NOMBRE', 
-                        'SEXO', 'NACIONALIDAD', 'ENTIDAD', 'MUNICIPIO', 'FECHA', 
-                        'DOCUMENTO', 'REGISTRO', 'DATOS', 'CLAVE ÚNICA DE REGISTRO DE POBLACIÓN', 'CURP'
-                    ];
-
                     for (let palabra of palabrasClave) {
-                        for (let el of allElements) {
-                            let textoEl = (el.innerText || el.textContent || '').trim().toUpperCase();
-                            
-                            // Validar si este elemento contiene la etiqueta exacta que buscamos
-                            if (textoEl === palabra || textoEl === palabra + ':' || (textoEl.includes(palabra) && textoEl.length < 35)) {
-                                
-                                // Encontramos el contenedor o fila (<tr> o div principal de esa línea)
-                                let contenedor = el.closest('tr') || el.closest('.row') || el.parentElement || el;
-                                
-                                // Extraer todos los textos posibles dentro de este mismo contenedor de la fila
-                                let candidatosContenedor = Array.from(contenedor.querySelectorAll('td, span, div, label, p, strong'))
-                                    .map(e => (e.innerText || e.textContent || '').trim().toUpperCase())
-                                    .filter(t => t.length > 1 && t !== '?');
+                        for (let el of elementos) {
+                            // SOLUCIÓN DEFINITIVA: Ignorar cualquier contenedor del formulario de búsqueda, pestañas o listas desplegables
+                            if (el.closest('form') || el.closest('#tab-01') || el.closest('#tab-02') || el.closest('.tab-content') || el.tagName === 'SELECT' || el.tagName === 'OPTION') {
+                                continue;
+                            }
 
-                                // Buscar el valor real que no sea la etiqueta ni la CURP buscada
-                                for (let cand of candidatosContenedor) {
-                                    let esEtiqueta = etiquetasProhibidas.some(ep => cand === ep || cand.includes(ep));
-                                    let esInvalido = cand === palabra || cand === palabra + ':' || cand.includes(curpBuscada.toUpperCase());
+                            const texto = (el.innerText || '').trim().toUpperCase();
+                            const textoLimpio = texto.replace(/:/g, '').trim();
+                            
+                            // Buscar coincidencia exacta con la etiqueta (ej. "PRIMER APELLIDO")
+                            if (textoLimpio === palabra) {
+                                
+                                // Escenario 1: Estructura de tabla (El estándar de los resultados de gobierno)
+                                if (el.tagName === 'TH' || el.tagName === 'TD') {
+                                    const siguienteCelda = el.nextElementSibling;
+                                    if (siguienteCelda && (siguienteCelda.tagName === 'TD' || siguienteCelda.tagName === 'TH')) {
+                                        const valor = siguienteCelda.innerText.trim().toUpperCase();
+                                        if (valor && !valor.includes('SELECCIONA') && valor !== '?') return valor;
+                                    }
                                     
-                                    if (!esInvalido && !esEtiqueta && cand.length > 1) {
-                                        return cand;
+                                    // Búsqueda alternativa en tabla: buscar la segunda celda dentro de la misma fila
+                                    const fila = el.closest('tr');
+                                    if (fila) {
+                                        const celdas = fila.querySelectorAll('td');
+                                        if (celdas.length >= 2) {
+                                            const valor = celdas[1].innerText.trim().toUpperCase();
+                                            if (valor && !valor.includes('SELECCIONA') && valor !== '?') return valor;
+                                        }
+                                    }
+                                }
+                                
+                                // Escenario 2: Estructura de Div/Span (texto contiguo)
+                                const padre = el.parentElement;
+                                if (padre) {
+                                    let textoPadre = (padre.innerText || '').toUpperCase();
+                                    // Remover la etiqueta para dejar solo el valor limpio
+                                    let valor = textoPadre.replace(texto, '').replace(/:/g, '').trim();
+                                    if (valor && !valor.includes('SELECCIONA') && valor.length > 1 && valor !== '?') {
+                                        return valor;
                                     }
                                 }
                             }
@@ -221,6 +202,7 @@ app.get('/scrape-curp', async (req, res) => {
                     }
                     return '';
                 };
+
 
 
 
