@@ -119,45 +119,36 @@ app.get('/scrape-curp', async (req, res) => {
             
             await new Promise(r => setTimeout(r, 5000));
 
-                        const datosExtraidos = await page.evaluate((curpBuscada) => {
+            const datosExtraidos = await page.evaluate((curpBuscada) => {
                 const textoPagina = document.body.innerText || "";
                 if (textoPagina.includes('Los datos ingresados no son correctos') || textoPagina.includes('El formato del CURP es inválido')) {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                // Limpiamos la basura visual enfocándonos solo de "Datos del solicitante" hacia abajo
-                let textoLimpio = textoPagina;
-                let idxInicio = textoPagina.toUpperCase().indexOf('DATOS DEL SOLICITANTE');
-                if (idxInicio !== -1) {
-                    textoLimpio = textoPagina.substring(idxInicio);
-                }
-
-                const lineas = textoLimpio.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-                
-                const extraerDato = (etiquetas) => {
-                    if (!Array.isArray(etiquetas)) etiquetas = [etiquetas];
-                    for (let i = 0; i < lineas.length; i++) {
-                        const lineaMayus = lineas[i].toUpperCase();
-                        
-                        if (etiquetas.some(etiq => lineaMayus.startsWith(etiq))) {
-                            // Valor en la misma línea: "NOMBRE(S): ISRAEL"
-                            let valor = lineas[i].substring(lineas[i].indexOf(':') + 1).trim();
-                            if (valor) return valor;
-
-                            // Valor en la línea inmediatamente inferior
-                            if (i + 1 < lineas.length) {
-                                let sigLinea = lineas[i + 1].trim();
-                                if (!sigLinea.includes(':') && !['SEXO', 'FECHA DE NACIMIENTO', 'NACIONALIDAD'].includes(sigLinea.toUpperCase())) {
-                                    return sigLinea;
-                                }
-                            }
+                const extraerValor = (palabrasClave) => {
+                    if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
+                    const etiquetas = elementos.filter(el => el.children.length === 0 && palabrasClave.some(palabra => el.innerText.trim().toUpperCase().includes(palabra)));
+                    
+                    for (let etiqueta of etiquetas) {
+                        let valorEncontrado = '';
+                        const textoCompleto = etiqueta.innerText.trim();
+                        if (textoCompleto.includes(':')) {
+                            const partes = textoCompleto.split(':');
+                            if (partes.length > 1 && partes[1].trim() !== '') valorEncontrado = partes[1].trim();
                         }
+                        if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
+                            valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
+                        } else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                            valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
+                        }
+                        if (valorEncontrado && valorEncontrado.length > 2) return valorEncontrado;
                     }
-                    return 'No encontrado';
+                    return '';
                 };
 
-                let fechaNac = extraerDato(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
-                if (!fechaNac || fechaNac === 'No encontrado') {
+                let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
+                if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
                     const anio = curpBuscada.substring(4, 6);
                     const mes = curpBuscada.substring(6, 8);
                     const dia = curpBuscada.substring(8, 10);
@@ -168,21 +159,21 @@ app.get('/scrape-curp', async (req, res) => {
 
                 return {
                     curp: curpBuscada,
-                    nombre: extraerDato(['NOMBRE(S)', 'NOMBRES', 'NOMBRE']),
-                    primerApellido: extraerDato(['PRIMER APELLIDO']),
-                    segundoApellido: extraerDato(['SEGUNDO APELLIDO']),
-                    sexo: extraerDato(['SEXO']),
-                    fechaNacimiento: fechaNac,
-                    nacionalidad: extraerDato(['NACIONALIDAD']),
-                    entidadNacimiento: extraerDato(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']),
-                    docProbatorio: extraerDato(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']), 
-                    anioRegistro: extraerDato(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']), 
-                    numeroActa: extraerDato(['NUMERO DE ACTA', 'NÚMERO DE ACTA']),
-                    entidadRegistro: extraerDato(['ENTIDAD DE REGISTRO']), 
-                    municipioRegistro: extraerDato(['MUNICIPIO DE REGISTRO'])
+                    nombre: extraerValor('NOMBRE') || 'No encontrado',
+                    primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
+                    segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
+                    sexo: extraerValor('SEXO') || 'No encontrado',
+                    fechaNacimiento: fechaNac || 'No encontrado',
+                    nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
+                    entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
+                    docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
+                    anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
+                    numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
+                    entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
+                    municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
                 };
             }, curp);
-
+            
             if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
                 await browser.close();
                 return res.status(404).json({ error: 'CURP_NO_EXISTENTE' });
