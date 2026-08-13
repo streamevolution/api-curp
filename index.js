@@ -114,34 +114,40 @@ app.get('/scrape-curp', async (req, res) => {
                         const urlObjetivo = 'https://www.gob.mx/curp/'; 
             await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
             
-            // --- INICIO DE CAMBIO QUIRÚRGICO ---
-            // 1. Forzar el clic en la pestaña correcta ("Clave Única de Registro de Población")
-            try {
-                await page.waitForSelector('a[href="#tab-01"]', { visible: true, timeout: 5000 });
-                await page.click('a[href="#tab-01"]');
-                await new Promise(r => setTimeout(r, 1000)); // Breve pausa para la transición de la pestaña
-            } catch (e) {
-                console.log("Pestaña no encontrada por href, continuando el flujo...");
-            }
+                      // --- INICIO DE CAMBIO QUIRÚRGICO ---
+            // Obligar al navegador a enfocarse y ejecutar acciones EXCLUSIVAMENTE en el formulario de la CURP
+            await page.waitForSelector('#curpinput', { visible: true, timeout: 20000 });
+            
+            await page.evaluate((curpIngresada) => {
+                // 1. Forzar el clic en la pestaña correcta mediante el DOM del navegador
+                const tab1 = document.querySelector('a[href="#tab-01"]');
+                if (tab1) tab1.click();
 
-            // 2. Selectores estrictos: Obligamos a Puppeteer a interactuar SOLO dentro de #tab-01
-            const selectorInput = '#tab-01 input[name*="curp" i], #tab-01 input[id*="curp" i], #curpinput';
-            const selectorBoton = '#tab-01 button[type="submit"], #searchButton';
+                // 2. Aislar el input específico y oficial de la CURP
+                const inputCurp = document.getElementById('curpinput');
+                if (inputCurp) {
+                    inputCurp.value = curpIngresada;
+                    // Disparar eventos nativos para que la página de gobierno registre que se escribió la CURP
+                    inputCurp.dispatchEvent(new Event('input', { bubbles: true }));
+                    inputCurp.dispatchEvent(new Event('change', { bubbles: true }));
+                    
+                    // 3. Buscar el botón "Buscar" que está estrictamente DENTRO del mismo formulario que el input
+                    const formCURP = inputCurp.closest('form');
+                    if (formCURP) {
+                        const botonBuscar = formCURP.querySelector('button[type="submit"], #searchButton');
+                        if (botonBuscar) botonBuscar.click();
+                    } else {
+                        // Fallback por si la estructura cambia levemente
+                        const btnFallback = document.querySelector('#tab-01 button[type="submit"]') || document.querySelector('#searchButton');
+                        if (btnFallback) btnFallback.click();
+                    }
+                }
+            }, curp);
 
-            await page.waitForSelector(selectorInput, { visible: true, timeout: 20000 });
-            
-            // 3. Limpiar el campo (por si hay texto residual) y escribir la CURP
-            const curpInput = await page.$(selectorInput);
-            await curpInput.click({ clickCount: 3 });
-            await curpInput.press('Backspace');
-            await curpInput.type(curp); 
-            
-            // 4. Clic en el botón buscar específico de esa pestaña
-            await page.click(selectorBoton); 
-            
-            // 5. Dar un segundo extra para que RENAPO procese y renderice la tabla
+            // 5. Dar tiempo suficiente para que el servidor de RENAPO procese la consulta y renderice la tabla
             await new Promise(r => setTimeout(r, 6000));
             // --- FIN DE CAMBIO QUIRÚRGICO ---
+
 
 
                         const datosExtraidos = await page.evaluate((curpBuscada) => {
