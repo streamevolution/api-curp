@@ -119,60 +119,36 @@ app.get('/scrape-curp', async (req, res) => {
             
             await new Promise(r => setTimeout(r, 5000));
 
-                        const datosExtraidos = await page.evaluate((curpBuscada) => {
+            const datosExtraidos = await page.evaluate((curpBuscada) => {
                 const textoPagina = document.body.innerText || "";
-                if (textoPagina.includes('Los datos ingresados no son correctos') || textoPagina.includes('El formato del CURP es inválido') || textoPagina.includes('no existe')) {
+                if (textoPagina.includes('Los datos ingresados no son correctos') || textoPagina.includes('El formato del CURP es inválido')) {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                // Extracción visual indestructible
-                let textos = [];
-                const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-                    acceptNode: function(node) {
-                        let parent = node.parentElement;
-                        if (parent) {
-                            let style = window.getComputedStyle(parent);
-                            if (style.display === 'none' || style.visibility === 'hidden') return NodeFilter.FILTER_REJECT;
-                            if (['SCRIPT', 'STYLE', 'NOSCRIPT'].includes(parent.tagName)) return NodeFilter.FILTER_REJECT;
-                        }
-                        return NodeFilter.FILTER_ACCEPT;
-                    }
-                }, false);
-
-                let n;
-                while(n = walker.nextNode()) {
-                    let val = n.nodeValue.trim();
-                    if (val) textos.push(val.toUpperCase());
-                }
-
-                const extraerValor = (claves) => {
-                    if (!Array.isArray(claves)) claves = [claves];
+                const extraerValor = (palabrasClave) => {
+                    if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
+                    const etiquetas = elementos.filter(el => el.children.length === 0 && palabrasClave.some(palabra => el.innerText.trim().toUpperCase().includes(palabra)));
                     
-                    for (let i = 0; i < textos.length; i++) {
-                        let textoCompleto = textos[i];
-                        
-                        for (let clave of claves) {
-                            if (textoCompleto.startsWith(clave + ':') || textoCompleto.startsWith(clave + ' :')) {
-                                let valorPegado = textoCompleto.substring(textoCompleto.indexOf(':') + 1).replace(/^[:*\s]+/, '').trim();
-                                if (valorPegado) return valorPegado;
-                            }
-                            
-                            let txtLimpio = textoCompleto.replace(/:$/, '').trim();
-                            if (txtLimpio === clave) {
-                                for(let j = i + 1; j <= i + 4 && j < textos.length; j++) {
-                                    let sig = textos[j];
-                                    if (sig !== '*' && sig !== '*:' && !sig.includes('SELECCIONAR')) {
-                                        return sig;
-                                    }
-                                }
-                            }
+                    for (let etiqueta of etiquetas) {
+                        let valorEncontrado = '';
+                        const textoCompleto = etiqueta.innerText.trim();
+                        if (textoCompleto.includes(':')) {
+                            const partes = textoCompleto.split(':');
+                            if (partes.length > 1 && partes[1].trim() !== '') valorEncontrado = partes[1].trim();
                         }
+                        if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
+                            valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
+                        } else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                            valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
+                        }
+                        if (valorEncontrado && valorEncontrado.length > 2) return valorEncontrado;
                     }
-                    return 'No encontrado';
+                    return '';
                 };
 
                 let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
-                if (!fechaNac || fechaNac === 'No encontrado') {
+                if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
                     const anio = curpBuscada.substring(4, 6);
                     const mes = curpBuscada.substring(6, 8);
                     const dia = curpBuscada.substring(8, 10);
@@ -183,21 +159,20 @@ app.get('/scrape-curp', async (req, res) => {
 
                 return {
                     curp: curpBuscada,
-                    nombre: extraerValor(['NOMBRE(S)', 'NOMBRES', 'NOMBRE']),
-                    primerApellido: extraerValor(['PRIMER APELLIDO']),
-                    segundoApellido: extraerValor(['SEGUNDO APELLIDO']),
-                    sexo: extraerValor(['SEXO']),
-                    fechaNacimiento: fechaNac,
-                    nacionalidad: extraerValor(['NACIONALIDAD']),
-                    entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']),
-                    docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']), 
-                    anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']), 
-                    numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']),
-                    entidadRegistro: extraerValor(['ENTIDAD DE REGISTRO']), 
-                    municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO'])
+                    nombre: extraerValor('NOMBRE') || 'No encontrado',
+                    primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
+                    segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
+                    sexo: extraerValor('SEXO') || 'No encontrado',
+                    fechaNacimiento: fechaNac || 'No encontrado',
+                    nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
+                    entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
+                    docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
+                    anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
+                    numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
+                    entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
+                    municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
                 };
             }, curp);
-
             
             if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
                 await browser.close();
