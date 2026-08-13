@@ -111,108 +111,44 @@ app.get('/scrape-curp', async (req, res) => {
                 }
             });
             
-                        const urlObjetivo = 'https://www.gob.mx/curp/'; 
+            const urlObjetivo = 'https://www.gob.mx/curp/'; 
             await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
+            await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 20000 });
+            await page.type('input[name*="curp" i], input[id*="curp" i]', curp); 
+            await page.click('button[type="submit"], #searchButton'); 
             
-                                // --- INICIO DE CAMBIO QUIRÚRGICO ---
-            // 1. Simular humano: Clic en la pestaña "Clave Única de Registro de Población"
-            try {
-                await page.waitForSelector('a[href="#tab-01"]', { visible: true, timeout: 5000 });
-                await page.click('a[href="#tab-01"]');
-                await new Promise(r => setTimeout(r, 1500)); // Pausa para dejar que la pestaña cargue visualmente
-            } catch (e) {
-                console.log("Pestaña no encontrada, continuando...");
-            }
+            await new Promise(r => setTimeout(r, 5000));
 
-            // 2. Simular humano: Buscar el campo específico y teclear la CURP
-            const selectorInput = '#tab-01 input[type="text"], #curpinput';
-            await page.waitForSelector(selectorInput, { visible: true, timeout: 15000 });
-            
-            const campoCurp = await page.$(selectorInput);
-            await campoCurp.click({ clickCount: 3 }); 
-            await campoCurp.press('Backspace');       
-            // Tipeo humano lento (100ms) para forzar al framework de RENAPO a registrar la escritura
-            await page.type(selectorInput, curp, { delay: 100 }); 
-
-            // 3. Simular humano: Buscar y dar clic EXACTAMENTE al botón que dice "Buscar" (junto a * Campos obligatorios)
-            await page.evaluate(() => {
-                const tab1 = document.querySelector('#tab-01');
-                if (tab1) {
-                    const botones = Array.from(tab1.querySelectorAll('button'));
-                    const botonBuscar = botones.find(b => (b.innerText || '').toUpperCase().includes('BUSCAR'));
-                    if (botonBuscar) {
-                        botonBuscar.click(); // Clic humano exacto
-                    }
-                }
-            });
-
-            // 4. Inteligencia visual: Esperar a que el texto "Datos del solicitante" o el error aparezca en pantalla
-            try {
-                await page.waitForFunction(() => {
-                    const texto = document.body.innerText.toUpperCase();
-                    return texto.includes('DATOS DEL SOLICITANTE') || 
-                           texto.includes('LOS DATOS INGRESADOS NO SON CORRECTOS') ||
-                           texto.includes('EL FORMATO DEL CURP ES INVÁLIDO');
-                }, { timeout: 15000 }); // Espera activa hasta 15 segundos
-                
-                await new Promise(r => setTimeout(r, 2000)); // Pausa extra para asegurar que la tabla termine de formarse
-            } catch(e) {
-                // Respaldo por si el servidor de RENAPO está muy lento
-                await new Promise(r => setTimeout(r, 8000)); 
-            }
-            // --- FIN DE CAMBIO QUIRÚRGICO ---
-
-
-                        const datosExtraidos = await page.evaluate((curpBuscada) => {
-                const bodyText = document.body.innerText.toUpperCase();
-                
-                // 1. Detección exacta del error oficial de RENAPO
-                if (bodyText.includes('LOS DATOS INGRESADOS NO SON CORRECTOS') || 
-                    bodyText.includes('EL FORMATO DEL CURP ES INVÁLIDO') ||
-                    bodyText.includes('TRAMITECURP@SEGOB.GOB.MX')) {
+            const datosExtraidos = await page.evaluate((curpBuscada) => {
+                const textoPagina = document.body.innerText || "";
+                if (textoPagina.includes('Los datos ingresados no son correctos') || textoPagina.includes('El formato del CURP es inválido')) {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                // 2. Aislar únicamente el texto de los resultados (ignora formularios)
-                const indexInicio = bodyText.indexOf('DATOS DEL SOLICITANTE');
-                let textoResultados = indexInicio !== -1 ? bodyText.substring(indexInicio) : bodyText;
-                
-                const lineas = textoResultados.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-
                 const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
+                    const etiquetas = elementos.filter(el => el.children.length === 0 && palabrasClave.some(palabra => el.innerText.trim().toUpperCase().includes(palabra)));
                     
-                    for (let palabra of palabrasClave) {
-                        for (let i = 0; i < lineas.length; i++) {
-                            const linea = lineas[i];
-                            const lineaLimpia = linea.replace(/:/g, '').replace(/\*/g, '').trim();
-                            
-                            // Si la línea es exactamente la etiqueta, el valor está en la siguiente línea
-                            if (lineaLimpia === palabra) {
-                                if (i + 1 < lineas.length) {
-                                    const valor = lineas[i + 1];
-                                    const etiquetasProhibidas = ['NOMBRE(S)', 'NOMBRE', 'PRIMER APELLIDO', 'SEGUNDO APELLIDO', 'SEXO', 'FECHA DE NACIMIENTO', 'NACIONALIDAD', 'ENTIDAD DE NACIMIENTO', 'DOCUMENTO', 'AÑO', 'NÚMERO', 'NUMERO', 'ENTIDAD DE REGISTRO', 'MUNICIPIO', 'DATOS'];
-                                    
-                                    const esEtiqueta = etiquetasProhibidas.some(e => valor === e || valor.startsWith(e + ':'));
-                                    
-                                    if (!esEtiqueta && valor.length > 1 && !valor.includes('SELECCIONA') && valor !== '?') {
-                                        return valor;
-                                    }
-                                }
-                            } 
-                            // Si la etiqueta y el valor quedaron en la misma línea (Ej: "NOMBRE(S): FAUSTO")
-                            else if (linea.startsWith(palabra + ':') || linea.startsWith(palabra + ' :')) {
-                                const valor = linea.substring(linea.indexOf(':') + 1).trim();
-                                if (valor.length > 1 && !valor.includes('SELECCIONA')) return valor;
-                            }
+                    for (let etiqueta of etiquetas) {
+                        let valorEncontrado = '';
+                        const textoCompleto = etiqueta.innerText.trim();
+                        if (textoCompleto.includes(':')) {
+                            const partes = textoCompleto.split(':');
+                            if (partes.length > 1 && partes[1].trim() !== '') valorEncontrado = partes[1].trim();
                         }
+                        if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
+                            valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
+                        } else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
+                            valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
+                        }
+                        if (valorEncontrado && valorEncontrado.length > 2) return valorEncontrado;
                     }
                     return '';
                 };
 
-                // --- INICIO DE GENERACIÓN DE DATOS DESDE CURP ---
                 let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
-                if (!fechaNac || fechaNac === 'NO ENCONTRADO') {
+                if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
                     const anio = curpBuscada.substring(4, 6);
                     const mes = curpBuscada.substring(6, 8);
                     const dia = curpBuscada.substring(8, 10);
@@ -221,48 +157,22 @@ app.get('/scrape-curp', async (req, res) => {
                     fechaNac = `${dia}/${mes}/${siglo}${anio}`;
                 }
 
-                const letraSexo = curpBuscada.charAt(10).toUpperCase();
-                const sexoGenerado = letraSexo === 'H' ? 'HOMBRE' : (letraSexo === 'M' ? 'MUJER' : 'No encontrado');
-
-                const mapaEntidades = {
-                    'AS': 'AGUASCALIENTES', 'BC': 'BAJA CALIFORNIA', 'BS': 'BAJA CALIFORNIA SUR',
-                    'CC': 'CAMPECHE', 'CL': 'COAHUILA DE ZARAGOZA', 'CM': 'COLIMA', 'CS': 'CHIAPAS',
-                    'CH': 'CHIHUAHUA', 'DF': 'CIUDAD DE MEXICO', 'DG': 'DURANGO', 'GT': 'GUANAJUATO',
-                    'GR': 'GUERRERO', 'HG': 'HIDALGO', 'JC': 'JALISCO', 'MC': 'MEXICO',
-                    'MN': 'MICHOACAN DE OCAMPO', 'MS': 'MORELOS', 'NT': 'NAYARIT', 'NL': 'NUEVO LEON',
-                    'OC': 'OAXACA', 'PL': 'PUEBLA', 'QT': 'QUERETARO', 'QR': 'QUINTANA ROO',
-                    'SP': 'SAN LUIS POTOSI', 'SL': 'SINALOA', 'SR': 'SONORA', 'TC': 'TABASCO',
-                    'TS': 'TAMAULIPAS', 'TL': 'TLAXCALA', 'VZ': 'VERACRUZ DE IGNACIO DE LA LLAVE',
-                    'YN': 'YUCATAN', 'ZS': 'ZACATECAS', 'NE': 'NACIDO EN EL EXTRANJERO'
-                };
-                const claveEntidad = curpBuscada.substring(11, 13).toUpperCase();
-                const entidadGenerada = mapaEntidades[claveEntidad] || 'No encontrado';
-
-                let nacionalidadGenerada = '';
-                if (claveEntidad !== 'NE') {
-                    nacionalidadGenerada = 'MEXICO'; 
-                } else {
-                    nacionalidadGenerada = extraerValor(['NACIONALIDAD']) || 'No encontrado'; 
-                }
-                // --- FIN DE GENERACIÓN DE DATOS ---
-
                 return {
                     curp: curpBuscada,
-                    nombre: extraerValor(['NOMBRE(S)', 'NOMBRE']) || 'No encontrado',
-                    primerApellido: extraerValor(['PRIMER APELLIDO']) || 'No encontrado',
-                    segundoApellido: extraerValor(['SEGUNDO APELLIDO']) || 'No encontrado',
-                    sexo: sexoGenerado, 
+                    nombre: extraerValor('NOMBRE') || 'No encontrado',
+                    primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
+                    segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
+                    sexo: extraerValor('SEXO') || 'No encontrado',
                     fechaNacimiento: fechaNac || 'No encontrado',
-                    nacionalidad: nacionalidadGenerada, 
-                    entidadNacimiento: entidadGenerada, 
+                    nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
+                    entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
                     docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
-                    anioRegistro: extraerValor(['AÑO REGISTRO', 'AÑO DE REGISTRO']) || 'No encontrado', 
-                    numeroActa: extraerValor(['NÚMERO DE ACTA', 'NUMERO DE ACTA']) || 'No encontrado',
-                    entidadRegistro: extraerValor(['ENTIDAD DE REGISTRO', 'ENTIDAD REGISTRO']) || 'No encontrado', 
-                    municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO', 'MUNICIPIO REGISTRO']) || 'No encontrado'
+                    anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
+                    numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
+                    entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
+                    municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
                 };
             }, curp);
-
             
             if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
                 await browser.close();
