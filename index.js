@@ -136,10 +136,8 @@ app.get('/scrape-curp', async (req, res) => {
                         });
 
                         if (candidatos.length > 0) {
-                            // Ordenar por longitud de texto para priorizar los elementos más precisos
                             candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
                             
-                            // NUEVO: Iterar sobre TODOS los candidatos encontrados
                             for (let el of candidatos) {
                                 const texto = el.innerText.trim().toUpperCase();
                                 let valorEncontrado = '';
@@ -150,7 +148,7 @@ app.get('/scrape-curp', async (req, res) => {
                                     return v;
                                 };
 
-                                // 1. En la misma etiqueta separado por ':'
+                                // 1. En la misma etiqueta
                                 if (texto.includes(':')) {
                                     const partes = texto.split(':');
                                     if (partes.length > 1 && partes[1].trim() !== '') {
@@ -158,7 +156,7 @@ app.get('/scrape-curp', async (req, res) => {
                                     }
                                 }
 
-                                // 2. En el siguiente hermano
+                                // 2. En el hermano directo
                                 if (!valorEncontrado && el.nextElementSibling) {
                                     valorEncontrado = limpiarValor(el.nextElementSibling.innerText);
                                 }
@@ -168,13 +166,17 @@ app.get('/scrape-curp', async (req, res) => {
                                     valorEncontrado = limpiarValor(el.parentElement.nextElementSibling.innerText);
                                 }
 
-                                // NUEVO: VALIDACIÓN ESTRICTA
-                                // Si encuentra basura de los menús desplegables del formulario original, lo ignora y pasa al siguiente candidato.
+                                // NUEVO: BLOQUEO TOTAL DE FORMULARIOS
+                                // Ignoramos cualquier valor que contenga un asterisco (*) o dos puntos (:)
+                                // Esto asegura que saltemos los labels del formulario y tomemos los datos reales.
                                 if (valorEncontrado && 
                                     valorEncontrado.length > 1 && 
                                     valorEncontrado.length < 150 && 
+                                    !valorEncontrado.includes('*') && 
+                                    !valorEncontrado.includes(':') &&
                                     !valorEncontrado.toUpperCase().includes('SELECCIONA') &&
-                                    !valorEncontrado.toUpperCase().includes('BINARIO')) {
+                                    !valorEncontrado.toUpperCase().includes('BINARIO') &&
+                                    !valorEncontrado.toUpperCase().includes('INGRESA')) {
                                     return valorEncontrado; 
                                 }
                             }
