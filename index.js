@@ -90,7 +90,7 @@ app.get('/scrape-curp', async (req, res) => {
             });
             const page = await browser.newPage();
 
-            // OPTIMIZACIÓN 1: Rotar User-Agent aleatoriamente
+            // OPTIMIZACIÓN 1:: Rotar User-Agent aleatoriamente
             const userAgents = [
                 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Safari/537.36',
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36',
