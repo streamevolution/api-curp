@@ -126,6 +126,7 @@ app.get('/scrape-curp', async (req, res) => {
                 }
 
                                                                 const extraerValor = (palabrasClave) => {
+                                   const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
                     // PASO 1: Buscar en Inputs (Para extraer Nombres y Apellidos ocultos)
@@ -150,7 +151,6 @@ app.get('/scrape-curp', async (req, res) => {
                                 }
                                 for (let inp of inputs) {
                                     const val = inp.value ? inp.value.trim().toUpperCase() : '';
-                                    // CORRECCIÓN CLAVE: Prohibir estrictamente que tome la CURP como resultado
                                     if (val.length > 1 && val !== curpBuscada.toUpperCase()) {
                                         return val.replace(/\?/g, '').trim();
                                     }
@@ -159,7 +159,7 @@ app.get('/scrape-curp', async (req, res) => {
                         }
                     }
 
-                    // PASO 2: TreeWalker (El método original que funcionó perfecto para el Sexo)
+                    // PASO 2: TreeWalker (El método original optimizado para saltar formularios)
                     for (let palabra of palabrasClave) {
                         const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
                         let node;
@@ -177,16 +177,21 @@ app.get('/scrape-curp', async (req, res) => {
                                         let partes = texto.split(':');
                                         if (partes.length > 1 && partes[1].trim().length > 1) {
                                             let res = partes.slice(1).join(':').trim();
-                                            if (res !== curpBuscada.toUpperCase()) return res;
+                                            // Ignoramos si la respuesta en la misma línea es una etiqueta
+                                            if (res !== curpBuscada.toUpperCase() && !res.includes('APELLIDO') && !res.includes('NOMBRE')) {
+                                                return res;
+                                            }
                                         }
                                     }
                                     encontrado = true; 
                                 }
                             } else {
                                 if (texto.length > 1 && texto.length < 150 && texto !== curpBuscada.toUpperCase()) {
-                                    // Seguro para evitar saltar a la siguiente etiqueta si el input estaba invisible
-                                    const prohibidas = ['APELLIDO', 'NOMBRE', 'SEXO', 'NACIONALIDAD', 'ENTIDAD', 'MUNICIPIO', 'DOCUMENTO', 'REGISTRO'];
-                                    const esEtiqueta = prohibidas.some(p => texto === p || texto === p + ':');
+                                    // CORRECCIÓN: Ahora bloquea de raíz frases que "incluyan" estas palabras, 
+                                    // evitando tomar "PRIMER APELLIDO" como si fuera un nombre real.
+                                    const prohibidas = ['APELLIDO', 'NOMBRE', 'SEXO', 'NACIONALIDAD', 'ENTIDAD', 'MUNICIPIO', 'DOCUMENTO', 'REGISTRO', 'FECHA', 'CURP'];
+                                    const esEtiqueta = prohibidas.some(p => texto.includes(p));
+                                    
                                     if (!esEtiqueta) {
                                         return texto;
                                     }
