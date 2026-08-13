@@ -198,7 +198,7 @@ app.get('/scrape-curp', async (req, res) => {
                 };
 
 
-                                // --- INICIO DE GENERACIÓN DE DATOS DESDE CURP ---
+                                               // --- INICIO DE GENERACIÓN DE DATOS DESDE CURP ---
                 // 1. Generar Fecha de Nacimiento
                 let fechaNac = extraerValor(['FECHA DE NACIMIENTO', 'FECHA NACIMIENTO']);
                 if (!fechaNac || fechaNac.toUpperCase() === 'NO ENCONTRADO') {
@@ -228,6 +228,14 @@ app.get('/scrape-curp', async (req, res) => {
                 };
                 const claveEntidad = curpBuscada.substring(11, 13).toUpperCase();
                 const entidadGenerada = mapaEntidades[claveEntidad] || 'No encontrado';
+
+                // 4. Generar Nacionalidad Híbrida
+                let nacionalidadGenerada = '';
+                if (claveEntidad !== 'NE') {
+                    nacionalidadGenerada = 'MEXICANA'; // Generado automático si nació en un estado
+                } else {
+                    nacionalidadGenerada = extraerValor(['NACIONALIDAD']) || 'No encontrado'; // Scrapea solo si es extranjero
+                }
                 // --- FIN DE GENERACIÓN DE DATOS ---
 
                 return {
@@ -235,16 +243,17 @@ app.get('/scrape-curp', async (req, res) => {
                     nombre: extraerValor(['NOMBRE(S)', 'NOMBRE']) || 'No encontrado',
                     primerApellido: extraerValor(['PRIMER APELLIDO']) || 'No encontrado',
                     segundoApellido: extraerValor(['SEGUNDO APELLIDO']) || 'No encontrado',
-                    sexo: sexoGenerado, // <-- Ahorra RAM, se usa el dato generado
+                    sexo: sexoGenerado, // <-- Ahorra RAM
                     fechaNacimiento: fechaNac || 'No encontrado',
-                    nacionalidad: extraerValor(['NACIONALIDAD']) || 'No encontrado',
-                    entidadNacimiento: entidadGenerada, // <-- Ahorra RAM, se usa el dato generado
+                    nacionalidad: nacionalidadGenerada, // <-- Híbrido: Ahorra RAM en el 98% de los casos
+                    entidadNacimiento: entidadGenerada, // <-- Ahorra RAM
                     docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
                     anioRegistro: extraerValor(['AÑO REGISTRO', 'AÑO DE REGISTRO']) || 'No encontrado', 
                     numeroActa: extraerValor(['NÚMERO DE ACTA', 'NUMERO DE ACTA']) || 'No encontrado',
                     entidadRegistro: extraerValor(['ENTIDAD DE REGISTRO']) || 'No encontrado', 
                     municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO']) || 'No encontrado'
                 };
+
 
 
 
