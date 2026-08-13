@@ -125,8 +125,7 @@ app.get('/scrape-curp', async (req, res) => {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                                                                const extraerValor = (palabrasClave) => {
-                                   const extraerValor = (palabrasClave) => {
+                                                                               const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
                     // PASO 1: Buscar en Inputs (Para extraer Nombres y Apellidos ocultos)
