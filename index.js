@@ -200,6 +200,7 @@ app.get('/scrape-curp', async (req, res) => {
                     municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO']) || 'No encontrado'
                 };
 
+            }, curp);
             
             if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
                 await browser.close();
