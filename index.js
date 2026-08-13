@@ -17,7 +17,7 @@ class ScrapingQueue {
     async enqueue(task, req) {
         let isCancelled = false;
         
-        // Si eell usuario cierra la pestaña o la plataforma corta la conexión, lo marcamos
+        // Si el usuario cierra la pestaña o la plataforma corta la conexión, lo marcamos
         if (req) {
             req.on('close', () => {
                 isCancelled = true;
@@ -125,24 +125,51 @@ app.get('/scrape-curp', async (req, res) => {
                     return { errorPersonalizado: 'CURP_NO_EXISTENTE' };
                 }
 
-                const extraerValor = (palabrasClave) => {
+                                const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
-                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p'));
-                    const etiquetas = elementos.filter(el => el.children.length === 0 && palabrasClave.some(palabra => el.innerText.trim().toUpperCase().includes(palabra)));
+                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
                     
-                    for (let etiqueta of etiquetas) {
-                        let valorEncontrado = '';
-                        const textoCompleto = etiqueta.innerText.trim();
-                        if (textoCompleto.includes(':')) {
-                            const partes = textoCompleto.split(':');
-                            if (partes.length > 1 && partes[1].trim() !== '') valorEncontrado = partes[1].trim();
+                    for (let palabra of palabrasClave) {
+                        const candidatos = elementos.filter(el => {
+                            const texto = (el.innerText || '').toUpperCase();
+                            return texto.includes(palabra);
+                        });
+
+                        if (candidatos.length > 0) {
+                            // Ordenar por longitud de texto para agarrar el contenedor más específico/profundo
+                            candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+                            const el = candidatos[0];
+                            const texto = el.innerText.trim().toUpperCase();
+
+                            const limpiarValor = (val) => {
+                                const v = val.trim().replace(/\n/g, ' ');
+                                // Evitar que retorne solo el ícono '?' de ayuda del Renapo
+                                return (v !== '?' && v.length > 1) ? v : ''; 
+                            };
+
+                            let valorEncontrado = '';
+
+                            // 1. Si el valor está en la misma etiqueta separado por ':'
+                            if (texto.includes(':')) {
+                                const partes = texto.split(':');
+                                if (partes.length > 1) {
+                                    valorEncontrado = limpiarValor(partes.slice(1).join(':'));
+                                    if (valorEncontrado) return valorEncontrado;
+                                }
+                            }
+
+                            // 2. Si el valor está en el siguiente elemento hermano
+                            if (el.nextElementSibling) {
+                                valorEncontrado = limpiarValor(el.nextElementSibling.innerText);
+                                if (valorEncontrado) return valorEncontrado;
+                            }
+
+                            // 3. Si el valor está en el hermano del elemento padre (clásico de tablas actualizadas)
+                            if (el.parentElement && el.parentElement.nextElementSibling) {
+                                valorEncontrado = limpiarValor(el.parentElement.nextElementSibling.innerText);
+                                if (valorEncontrado) return valorEncontrado;
+                            }
                         }
-                        if (!valorEncontrado && etiqueta.nextElementSibling && etiqueta.nextElementSibling.innerText.trim() !== '') {
-                            valorEncontrado = etiqueta.nextElementSibling.innerText.trim();
-                        } else if (!valorEncontrado && etiqueta.parentElement && etiqueta.parentElement.nextElementSibling) {
-                            valorEncontrado = etiqueta.parentElement.nextElementSibling.innerText.trim();
-                        }
-                        if (valorEncontrado && valorEncontrado.length > 2) return valorEncontrado;
                     }
                     return '';
                 };
@@ -159,20 +186,20 @@ app.get('/scrape-curp', async (req, res) => {
 
                 return {
                     curp: curpBuscada,
-                    nombre: extraerValor('NOMBRE') || 'No encontrado',
-                    primerApellido: extraerValor('PRIMER APELLIDO') || 'No encontrado',
-                    segundoApellido: extraerValor('SEGUNDO APELLIDO') || 'No encontrado',
-                    sexo: extraerValor('SEXO') || 'No encontrado',
+                    nombre: extraerValor(['NOMBRE(S)', 'NOMBRE']) || 'No encontrado',
+                    primerApellido: extraerValor(['PRIMER APELLIDO']) || 'No encontrado',
+                    segundoApellido: extraerValor(['SEGUNDO APELLIDO']) || 'No encontrado',
+                    sexo: extraerValor(['SEXO']) || 'No encontrado',
                     fechaNacimiento: fechaNac || 'No encontrado',
-                    nacionalidad: extraerValor('NACIONALIDAD') || 'No encontrado',
+                    nacionalidad: extraerValor(['NACIONALIDAD']) || 'No encontrado',
                     entidadNacimiento: extraerValor(['ENTIDAD DE NACIMIENTO', 'ESTADO DE NACIMIENTO']) || 'No encontrado',
                     docProbatorio: extraerValor(['DOCUMENTO PROBATORIO', 'DOC PROBATORIO']) || 'No encontrado', 
-                    anioRegistro: extraerValor(['AÑO DE REGISTRO', 'AÑO REGISTRO', 'ANO DE REGISTRO']) || 'No encontrado', 
-                    numeroActa: extraerValor(['NUMERO DE ACTA', 'NÚMERO DE ACTA']) || 'No encontrado',
-                    entidadRegistro: extraerValor('ENTIDAD DE REGISTRO') || 'No encontrado', 
-                    municipioRegistro: extraerValor('MUNICIPIO DE REGISTRO') || 'No encontrado'
+                    anioRegistro: extraerValor(['AÑO REGISTRO', 'AÑO DE REGISTRO']) || 'No encontrado', 
+                    numeroActa: extraerValor(['NÚMERO DE ACTA', 'NUMERO DE ACTA']) || 'No encontrado',
+                    entidadRegistro: extraerValor(['ENTIDAD DE REGISTRO']) || 'No encontrado', 
+                    municipioRegistro: extraerValor(['MUNICIPIO DE REGISTRO']) || 'No encontrado'
                 };
-            }, curp);
+
             
             if (datosExtraidos && datosExtraidos.errorPersonalizado === 'CURP_NO_EXISTENTE') {
                 await browser.close();
