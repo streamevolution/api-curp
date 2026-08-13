@@ -114,40 +114,34 @@ app.get('/scrape-curp', async (req, res) => {
                         const urlObjetivo = 'https://www.gob.mx/curp/'; 
             await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
             
-                      // --- INICIO DE CAMBIO QUIRÚRGICO ---
-            // Obligar al navegador a enfocarse y ejecutar acciones EXCLUSIVAMENTE en el formulario de la CURP
-            await page.waitForSelector('#curpinput', { visible: true, timeout: 20000 });
-            
-            await page.evaluate((curpIngresada) => {
-                // 1. Forzar el clic en la pestaña correcta mediante el DOM del navegador
-                const tab1 = document.querySelector('a[href="#tab-01"]');
-                if (tab1) tab1.click();
+                                // --- INICIO DE CAMBIO QUIRÚRGICO ---
+            // 1. Forzar el clic en la pestaña correcta
+            try {
+                await page.waitForSelector('a[href="#tab-01"]', { visible: true, timeout: 5000 });
+                await page.click('a[href="#tab-01"]');
+                await new Promise(r => setTimeout(r, 1000)); // Transición de pestaña
+            } catch (e) {
+                console.log("Pestaña no encontrada, continuando el flujo...");
+            }
 
-                // 2. Aislar el input específico y oficial de la CURP
-                const inputCurp = document.getElementById('curpinput');
-                if (inputCurp) {
-                    inputCurp.value = curpIngresada;
-                    // Disparar eventos nativos para que la página de gobierno registre que se escribió la CURP
-                    inputCurp.dispatchEvent(new Event('input', { bubbles: true }));
-                    inputCurp.dispatchEvent(new Event('change', { bubbles: true }));
-                    
-                    // 3. Buscar el botón "Buscar" que está estrictamente DENTRO del mismo formulario que el input
-                    const formCURP = inputCurp.closest('form');
-                    if (formCURP) {
-                        const botonBuscar = formCURP.querySelector('button[type="submit"], #searchButton');
-                        if (botonBuscar) botonBuscar.click();
-                    } else {
-                        // Fallback por si la estructura cambia levemente
-                        const btnFallback = document.querySelector('#tab-01 button[type="submit"]') || document.querySelector('#searchButton');
-                        if (btnFallback) btnFallback.click();
-                    }
-                }
-            }, curp);
+            // 2. Detectar el input de la CURP de forma universal
+            const selectorInput = 'input[formcontrolname="curp"], input[name="curp" i], #curpinput, #curp';
+            await page.waitForSelector(selectorInput, { visible: true, timeout: 15000 });
 
-            // 5. Dar tiempo suficiente para que el servidor de RENAPO procese la consulta y renderice la tabla
-            await new Promise(r => setTimeout(r, 6000));
+            // 3. Simular TECLADO HUMANO (Esto arregla el problema de que RENAPO no detecte el texto)
+            const campoCurp = await page.$(selectorInput);
+            await campoCurp.click({ clickCount: 3 }); // Seleccionar todo el texto residual
+            await campoCurp.press('Backspace');       // Borrarlo
+            await page.type(selectorInput, curp, { delay: 30 }); // Escribir letra por letra con 30ms de retraso
+
+            // 4. Hacer clic NATIVO en el botón de buscar
+            const selectorBoton = '#tab-01 button[type="submit"], form button[type="submit"], #searchButton';
+            await page.waitForSelector(selectorBoton, { visible: true, timeout: 5000 });
+            await page.click(selectorBoton);
+
+            // 5. Esperar 8 segundos para garantizar que el servidor de RENAPO renderice la respuesta o el error
+            await new Promise(r => setTimeout(r, 8000));
             // --- FIN DE CAMBIO QUIRÚRGICO ---
-
 
 
                         const datosExtraidos = await page.evaluate((curpBuscada) => {
