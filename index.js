@@ -128,71 +128,65 @@ app.get('/scrape-curp', async (req, res) => {
                                                                                const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
                     
-                    // PASO 1: Buscar en Inputs (Para extraer Nombres y Apellidos ocultos)
-                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
-                    for (let palabra of palabrasClave) {
-                        const candidatos = elementos.filter(el => {
-                            const texto = (el.innerText || '').toUpperCase();
-                            if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) return false;
-                            return texto.includes(palabra);
-                        });
+                    // MÉTODO DEFINITIVO: Análisis del texto visual de la página
+                    // document.body.innerText nos da el texto exactamente como se ve en pantalla,
+                    // convirtiendo tablas y columnas en saltos de línea (\n) o tabulaciones (\t).
+                    let textoVisual = document.body.innerText || '';
+                    
+                    let lineas = textoVisual
+                        .toUpperCase()
+                        .replace(/\t/g, '\n') 
+                        .split('\n')
+                        .map(l => l.trim())
+                        .filter(l => l.length > 0 && l !== '?');
                         
-                        if (candidatos.length > 0) {
-                            candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
-                            for (let el of candidatos) {
-                                const inputs = [];
-                                if (el.nextElementSibling && el.nextElementSibling.tagName === 'INPUT') inputs.push(el.nextElementSibling);
-                                if (el.parentElement) {
-                                    inputs.push(...Array.from(el.parentElement.querySelectorAll('input')));
-                                    if (el.parentElement.nextElementSibling) {
-                                        inputs.push(...Array.from(el.parentElement.nextElementSibling.querySelectorAll('input')));
-                                    }
-                                }
-                                for (let inp of inputs) {
-                                    const val = inp.value ? inp.value.trim().toUpperCase() : '';
-                                    if (val.length > 1 && val !== curpBuscada.toUpperCase()) {
-                                        return val.replace(/\?/g, '').trim();
-                                    }
-                                }
-                            }
+                    // Unimos etiquetas que la página web haya cortado en dos renglones
+                    let lineasUnidas = [];
+                    for (let i = 0; i < lineas.length; i++) {
+                        if (lineas[i] === 'PRIMER' && lineas[i+1] && lineas[i+1].includes('APELLIDO')) {
+                            lineasUnidas.push('PRIMER APELLIDO:');
+                            i++; // Saltamos la siguiente línea porque ya la unimos
+                        } else if (lineas[i] === 'SEGUNDO' && lineas[i+1] && lineas[i+1].includes('APELLIDO')) {
+                            lineasUnidas.push('SEGUNDO APELLIDO:');
+                            i++;
+                        } else if (lineas[i] === 'NOMBRE(S)' || lineas[i] === 'NOMBRE') {
+                            lineasUnidas.push('NOMBRE(S):');
+                            if (!lineas[i].includes(':') && lineas[i+1] === ':') i++;
+                        } else {
+                            lineasUnidas.push(lineas[i]);
                         }
                     }
 
-                    // PASO 2: TreeWalker (El método original optimizado para saltar formularios)
                     for (let palabra of palabrasClave) {
-                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                        let node;
-                        let encontrado = false;
-                        
-                        while ((node = walker.nextNode())) {
-                            let texto = node.nodeValue.trim().toUpperCase();
+                        for (let i = 0; i < lineasUnidas.length; i++) {
+                            let linea = lineasUnidas[i];
                             
-                            if (texto.length === 0 || texto === '?') continue;
-                            if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) continue; 
-                            
-                            if (!encontrado) {
-                                if (texto.includes(palabra)) {
-                                    if (texto.includes(':')) {
-                                        let partes = texto.split(':');
-                                        if (partes.length > 1 && partes[1].trim().length > 1) {
-                                            let res = partes.slice(1).join(':').trim();
-                                            // Ignoramos si la respuesta en la misma línea es una etiqueta
-                                            if (res !== curpBuscada.toUpperCase() && !res.includes('APELLIDO') && !res.includes('NOMBRE')) {
-                                                return res;
-                                            }
-                                        }
+                            // Si encontramos la etiqueta (Ej. "NOMBRE(S):")
+                            if (linea.includes(palabra)) {
+                                // Caso A: El valor está en la misma línea después de los dos puntos
+                                if (linea.includes(':')) {
+                                    let partes = linea.split(':');
+                                    let valor = partes.slice(1).join(':').trim();
+                                    if (valor.length > 1 && valor !== curpBuscada.toUpperCase()) {
+                                        return valor;
                                     }
-                                    encontrado = true; 
                                 }
-                            } else {
-                                if (texto.length > 1 && texto.length < 150 && texto !== curpBuscada.toUpperCase()) {
-                                    // CORRECCIÓN: Ahora bloquea de raíz frases que "incluyan" estas palabras, 
-                                    // evitando tomar "PRIMER APELLIDO" como si fuera un nombre real.
-                                    const prohibidas = ['APELLIDO', 'NOMBRE', 'SEXO', 'NACIONALIDAD', 'ENTIDAD', 'MUNICIPIO', 'DOCUMENTO', 'REGISTRO', 'FECHA', 'CURP'];
-                                    const esEtiqueta = prohibidas.some(p => texto.includes(p));
+                                
+                                // Caso B: El valor está en la siguiente línea visual
+                                if (i + 1 < lineasUnidas.length) {
+                                    let valorSiguiente = lineasUnidas[i + 1];
                                     
-                                    if (!esEtiqueta) {
-                                        return texto;
+                                    // Bloqueamos cualquier texto basura que haya capturado por error
+                                    const basura = [
+                                        'APELLIDO', 'NOMBRE', 'SEXO', 'NACIONALIDAD', 'ENTIDAD', 
+                                        'MUNICIPIO', 'DÍA DE NACIMIENTO', 'DIA DE NACIMIENTO', 
+                                        'DATOS', 'REGISTRO', 'DOCUMENTO', 'ESTADO', 'CLAVE'
+                                    ];
+                                    
+                                    let esBasura = basura.some(b => valorSiguiente.includes(b));
+                                    
+                                    if (!esBasura && valorSiguiente !== curpBuscada.toUpperCase()) {
+                                        return valorSiguiente;
                                     }
                                 }
                             }
