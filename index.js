@@ -111,13 +111,38 @@ app.get('/scrape-curp', async (req, res) => {
                 }
             });
             
-            const urlObjetivo = 'https://www.gob.mx/curp/'; 
+                        const urlObjetivo = 'https://www.gob.mx/curp/'; 
             await page.goto(urlObjetivo, { waitUntil: 'networkidle2', timeout: 60000 });
-            await page.waitForSelector('input[name*="curp" i], input[id*="curp" i]', { visible: true, timeout: 20000 });
-            await page.type('input[name*="curp" i], input[id*="curp" i]', curp); 
-            await page.click('button[type="submit"], #searchButton'); 
             
-            await new Promise(r => setTimeout(r, 5000));
+            // --- INICIO DE CAMBIO QUIRÚRGICO ---
+            // 1. Forzar el clic en la pestaña correcta ("Clave Única de Registro de Población")
+            try {
+                await page.waitForSelector('a[href="#tab-01"]', { visible: true, timeout: 5000 });
+                await page.click('a[href="#tab-01"]');
+                await new Promise(r => setTimeout(r, 1000)); // Breve pausa para la transición de la pestaña
+            } catch (e) {
+                console.log("Pestaña no encontrada por href, continuando el flujo...");
+            }
+
+            // 2. Selectores estrictos: Obligamos a Puppeteer a interactuar SOLO dentro de #tab-01
+            const selectorInput = '#tab-01 input[name*="curp" i], #tab-01 input[id*="curp" i], #curpinput';
+            const selectorBoton = '#tab-01 button[type="submit"], #searchButton';
+
+            await page.waitForSelector(selectorInput, { visible: true, timeout: 20000 });
+            
+            // 3. Limpiar el campo (por si hay texto residual) y escribir la CURP
+            const curpInput = await page.$(selectorInput);
+            await curpInput.click({ clickCount: 3 });
+            await curpInput.press('Backspace');
+            await curpInput.type(curp); 
+            
+            // 4. Clic en el botón buscar específico de esa pestaña
+            await page.click(selectorBoton); 
+            
+            // 5. Dar un segundo extra para que RENAPO procese y renderice la tabla
+            await new Promise(r => setTimeout(r, 6000));
+            // --- FIN DE CAMBIO QUIRÚRGICO ---
+
 
             const datosExtraidos = await page.evaluate((curpBuscada) => {
                 const textoPagina = document.body.innerText || "";
