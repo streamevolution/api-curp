@@ -127,57 +127,42 @@ app.get('/scrape-curp', async (req, res) => {
 
                                 const extraerValor = (palabrasClave) => {
                     if (!Array.isArray(palabrasClave)) palabrasClave = [palabrasClave];
-                    const elementos = Array.from(document.querySelectorAll('td, th, span, div, strong, label, p, b'));
                     
                     for (let palabra of palabrasClave) {
-                        const candidatos = elementos.filter(el => {
-                            const texto = (el.innerText || '').toUpperCase();
-                            return texto.includes(palabra);
-                        });
-
-                        if (candidatos.length > 0) {
-                            candidatos.sort((a, b) => (a.innerText || '').length - (b.innerText || '').length);
+                        // TreeWalker: Extrae todo el texto visible, ignorando las divisiones invisibles del HTML
+                        const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                        let node;
+                        let encontrado = false;
+                        
+                        while ((node = walker.nextNode())) {
+                            let texto = node.nodeValue.trim().toUpperCase();
                             
-                            for (let el of candidatos) {
-                                const texto = el.innerText.trim().toUpperCase();
-                                let valorEncontrado = '';
+                            // 1. Omitimos nodos de texto vacíos o el ícono de ayuda (?)
+                            if (texto.length === 0 || texto === '?') continue;
 
-                                const limpiarValor = (val) => {
-                                    let v = val.trim().replace(/\n/g, ' ');
-                                    if (v.includes('?')) v = v.replace(/\?/g, '').trim(); 
-                                    return v;
-                                };
-
-                                // 1. En la misma etiqueta
-                                if (texto.includes(':')) {
-                                    const partes = texto.split(':');
-                                    if (partes.length > 1 && partes[1].trim() !== '') {
-                                        valorEncontrado = limpiarValor(partes.slice(1).join(':'));
+                            // 2. Filtro estricto de la "basura" del formulario que me mostraste
+                            if (texto.includes('*') || texto.includes('SELECCIONA') || texto.includes('BINARIO') || texto.includes('INGRESA')) {
+                                continue; 
+                            }
+                            
+                            if (!encontrado) {
+                                // Revisamos si este texto es nuestra etiqueta buscada
+                                if (texto.includes(palabra)) {
+                                    // A veces el valor viene pegado a la etiqueta (ej: "NOMBRE(S): JUAN")
+                                    if (texto.includes(':')) {
+                                        let partes = texto.split(':');
+                                        if (partes.length > 1 && partes[1].trim().length > 1) {
+                                            return partes.slice(1).join(':').trim();
+                                        }
                                     }
+                                    // Si no venía pegado, marcamos que ya encontramos el título
+                                    encontrado = true; 
                                 }
-
-                                // 2. En el hermano directo
-                                if (!valorEncontrado && el.nextElementSibling) {
-                                    valorEncontrado = limpiarValor(el.nextElementSibling.innerText);
-                                }
-
-                                // 3. En el hermano del padre
-                                if (!valorEncontrado && el.parentElement && el.parentElement.nextElementSibling) {
-                                    valorEncontrado = limpiarValor(el.parentElement.nextElementSibling.innerText);
-                                }
-
-                                // NUEVO: BLOQUEO TOTAL DE FORMULARIOS
-                                // Ignoramos cualquier valor que contenga un asterisco (*) o dos puntos (:)
-                                // Esto asegura que saltemos los labels del formulario y tomemos los datos reales.
-                                if (valorEncontrado && 
-                                    valorEncontrado.length > 1 && 
-                                    valorEncontrado.length < 150 && 
-                                    !valorEncontrado.includes('*') && 
-                                    !valorEncontrado.includes(':') &&
-                                    !valorEncontrado.toUpperCase().includes('SELECCIONA') &&
-                                    !valorEncontrado.toUpperCase().includes('BINARIO') &&
-                                    !valorEncontrado.toUpperCase().includes('INGRESA')) {
-                                    return valorEncontrado; 
+                            } else {
+                                // Si ya habíamos encontrado el título en el ciclo anterior, 
+                                // este nodo de texto INMEDIATO es nuestro valor real.
+                                if (texto.length > 1 && texto.length < 150) {
+                                    return texto;
                                 }
                             }
                         }
