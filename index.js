@@ -17,7 +17,7 @@ class ScrapingQueue {
     async enqueue(task, req) {
         let isCancelled = false;
         
-        // Si el usuario cierra la pestaña o la plataforma corta la conexión, lo marcamos
+        // Sii el usuario cierra la pestaña o la plataforma corta la conexión, lo marcamos
         if (req) {
             req.on('close', () => {
                 isCancelled = true;
